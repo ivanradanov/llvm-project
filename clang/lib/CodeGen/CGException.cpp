@@ -733,9 +733,16 @@ llvm::BasicBlock *CodeGenFunction::getInvokeDestImpl() {
       return nullptr;
   }
 
+  // TODO_CUDA_CPU look into whether these dyn_casts are correct
+
   // CUDA device code doesn't have exceptions.
+  if (LO.CUDA && __CUDA_CPU_MODE__ &&
+      (dyn_cast<FunctionDecl>(CurFuncDecl)->hasAttr<CUDADeviceAttr>() ||
+       dyn_cast<FunctionDecl>(CurFuncDecl)->hasAttr<CUDAGlobalAttr>()))
+	  return nullptr;
   if (LO.CUDA && LO.CUDAIsDevice)
     return nullptr;
+
 
   // Check the innermost scope for a cached landing pad.  If this is
   // a non-EH cleanup, we'll check enclosing scopes in EmitLandingPad.

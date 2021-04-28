@@ -23,6 +23,12 @@ using namespace CodeGen;
 
 CGCUDARuntime::~CGCUDARuntime() {}
 
+// TODO_CUDA_CPU this gets called by EmitCallExpr, we probably need to hook a
+// call to our cudaLaunchKernel here and pass the (normal) function pointer
+
+// Or maybe not here but wherever the const CUDAKernelCallExpr *E gets created
+// as that is the call being emitted
+
 RValue CGCUDARuntime::EmitCUDAKernelCallExpr(CodeGenFunction &CGF,
                                              const CUDAKernelCallExpr *E,
                                              ReturnValueSlot ReturnValue) {

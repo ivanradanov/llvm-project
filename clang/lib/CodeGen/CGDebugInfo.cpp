@@ -1955,7 +1955,7 @@ CGDebugInfo::CollectTemplateParams(const TemplateParameterList *TPList,
       // Skip retrieve the value if that template parameter has cuda device
       // attribute, i.e. that value is not available at the host side.
       if (!CGM.getLangOpts().CUDA || CGM.getLangOpts().CUDAIsDevice ||
-          !D->hasAttr<CUDADeviceAttr>()) {
+          !D->hasAttr<CUDADeviceAttr>() || __CUDA_CPU_MODE__) {
         const CXXMethodDecl *MD;
         // Variable pointer template parameters have a value that is the address
         // of the variable.
@@ -4816,6 +4816,9 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
       else if (D->hasAttr<CUDAConstantAttr>())
         AddressSpace =
             CGM.getContext().getTargetAddressSpace(LangAS::cuda_constant);
+    } else if (CGM.getLangOpts().CUDA && __CUDA_CPU_MODE__){
+	    // TODO have to do the shared/const global variable trickery here
+	    assert(false && "not yet implemented");
     }
     AppendAddressSpaceXDeref(AddressSpace, Expr);
 

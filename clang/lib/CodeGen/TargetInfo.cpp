@@ -7140,6 +7140,9 @@ void NVPTXTargetCodeGenInfo::setTargetAttributes(
     // __global__ functions cannot be called from the device, we do not
     // need to set the noinline attribute.
     if (FD->hasAttr<CUDAGlobalAttr>()) {
+	    // TODO_CUDA_CPU this might be the place to add information about our
+	    // __device__ functions (such as argc?)
+
       // Create !{<func-ref>, metadata !"kernel", i32 1} node
       addNVVMMetadata(F, "kernel", 1);
     }

@@ -1344,7 +1344,9 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     EmitConstructorBody(Args);
   else if (getLangOpts().CUDA &&
            !getLangOpts().CUDAIsDevice &&
-           FD->hasAttr<CUDAGlobalAttr>())
+           FD->hasAttr<CUDAGlobalAttr>() &&
+           !__CUDA_CPU_MODE__)
+	  // TODO_CUDA_CPU will have to do some hackery here
     CGM.getCUDARuntime().emitDeviceStub(*this, Args);
   else if (isa<CXXMethodDecl>(FD) &&
            cast<CXXMethodDecl>(FD)->isLambdaStaticInvoker()) {

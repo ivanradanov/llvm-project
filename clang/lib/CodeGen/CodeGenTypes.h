@@ -19,6 +19,11 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Module.h"
 
+// TODO_CUDA_CPU
+// fast hack, would eventually want to properly add clang command line arguments
+// for it and pass it around as a LangOpt
+#define __CUDA_CPU_MODE__ true
+
 namespace llvm {
 class FunctionType;
 class DataLayout;

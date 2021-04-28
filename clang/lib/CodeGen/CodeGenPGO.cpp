@@ -861,7 +861,7 @@ bool CodeGenPGO::skipRegionMappingForDecl(const Decl *D) {
   // functions in the host compilation. Just roughly filter them out based on
   // the function attributes. If there are effectively host-only or device-only
   // ones, their coverage mapping may still be generated.
-  if (CGM.getLangOpts().CUDA &&
+  if (CGM.getLangOpts().CUDA && !__CUDA_CPU_MODE__ &&
       ((CGM.getLangOpts().CUDAIsDevice && !D->hasAttr<CUDADeviceAttr>() &&
         !D->hasAttr<CUDAGlobalAttr>()) ||
        (!CGM.getLangOpts().CUDAIsDevice &&
