@@ -1260,8 +1260,50 @@ installed.
 Controlling Floating Point Behavior
 -----------------------------------
 
-Clang provides a number of ways to control floating point behavior. The options
-are listed below.
+Clang provides a number of ways to control floating point behavior, including
+with command line options and source pragmas. This section
+describes the various floating point semantic modes and the corresponding options.
+
+.. csv-table:: Floating Point Semantic Modes
+  :header: "Mode", "Values"
+  :widths: 15, 30, 30
+
+  "except_behavior", "{ignore, strict, may_trap}", "ffp-exception-behavior"
+  "fenv_access", "{off, on}", "(none)"
+  "rounding_mode", "{dynamic, tonearest, downward, upward, towardzero}", "frounding-math"
+  "contract", "{on, off, fast}", "ffp-contract"
+  "denormal_fp_math", "{IEEE, PreserveSign, PositiveZero}", "fdenormal-fp-math"
+  "denormal_fp32_math", "{IEEE, PreserveSign, PositiveZero}", "fdenormal-fp-math-fp32"
+  "support_math_errno", "{on, off}", "fmath-errno"
+  "no_honor_nans", "{on, off}", "fhonor-nans"
+  "no_honor_infinities", "{on, off}", "fhonor-infinities"
+  "no_signed_zeros", "{on, off}", "fsigned-zeros"
+  "allow_reciprocal", "{on, off}", "freciprocal-math"
+  "allow_approximate_fns", "{on, off}", "(none)"
+  "allow_reassociation", "{on, off}", "fassociative-math"
+
+
+This table describes the option settings that correspond to the three
+floating point semantic models: precise (the default), strict, and fast.
+
+
+.. csv-table:: Floating Point Models
+  :header: "Mode", "Precise", "Strict", "Fast"
+  :widths: 25, 15, 15, 15
+
+  "except_behavior", "ignore", "strict", "ignore"
+  "fenv_access", "off", "on", "off"
+  "rounding_mode", "tonearest", "dynamic", "tonearest"
+  "contract", "on", "off", "fast"
+  "denormal_fp_math", "IEEE", "IEEE", "PreserveSign"
+  "denormal_fp32_math", "IEEE","IEEE", "PreserveSign"
+  "support_math_errno", "on", "on", "off"
+  "no_honor_nans", "off", "off", "on"
+  "no_honor_infinities", "off", "off", "on"
+  "no_signed_zeros", "off", "off", "on"
+  "allow_reciprocal", "off", "off", "on"
+  "allow_approximate_fns", "off", "off", "on"
+  "allow_reassociation", "off", "off", "on"
 
 .. option:: -ffast-math
 
@@ -1456,7 +1498,7 @@ Note that floating-point operations performed as part of constant initialization
    and ``fast``.
    Details:
 
-   * ``precise`` Disables optimizations that are not value-safe on floating-point data, although FP contraction (FMA) is enabled (``-ffp-contract=fast``).  This is the default behavior.
+   * ``precise`` Disables optimizations that are not value-safe on floating-point data, although FP contraction (FMA) is enabled (``-ffp-contract=on``).  This is the default behavior.
    * ``strict`` Enables ``-frounding-math`` and ``-ffp-exception-behavior=strict``, and disables contractions (FMA).  All of the ``-ffast-math`` enablements are disabled. Enables ``STDC FENV_ACCESS``: by default ``FENV_ACCESS`` is disabled. This option setting behaves as though ``#pragma STDC FENV_ACESS ON`` appeared at the top of the source file.
    * ``fast`` Behaves identically to specifying both ``-ffast-math`` and ``ffp-contract=fast``
 
@@ -1478,6 +1520,37 @@ Note that floating-point operations performed as part of constant initialization
    * ``maytrap`` The compiler avoids transformations that may raise exceptions that would not have been raised by the original code. Constant folding performed by the compiler is exempt from this option.
    * ``strict`` The compiler ensures that all transformations strictly preserve the floating point exception semantics of the original code.
 
+.. option:: -ffp-eval-method=<value>
+
+   Specify the floating-point evaluation method.
+
+   Valid values are: ``source``, ``double``, and ``extended``.
+   The default value is target-specific, typically ``source``.  Details:
+
+   * ``source`` The compiler uses the floating-point type declared in the source program as the evaluation method.
+   * ``double`` The compiler uses ``double`` as the floating-point evaluation method for all float expressions of type that is narrower than ``double``.
+   * ``extended`` The compiler uses ``long double`` as the floating-point evaluation method for all float expressions of type that is narrower than ``long double``.
+
+.. option:: -f[no-]protect-parens:
+
+   This option pertains to floating-point types, complex types with
+   floating-point components, and vectors of these types. Some arithmetic
+   expression transformations that are mathematically correct and permissible
+   according to the C and C++ language standards may be incorrect when dealing
+   with floating-point types, such as reassociation and distribution. Further,
+   the optimizer may ignore parentheses when computing arithmetic expressions
+   in circumstances where the parenthesized and unparenthesized expression
+   express the same mathematical value. For example (a+b)+c is the same
+   mathematical value as a+(b+c), but the optimizer is free to evaluate the 
+   additions in any order regardless of the parentheses. When enabled, this
+   option forces the optimizer to honor the order of operations with respect
+   to parentheses in all circumstances.
+
+   Note that floating-point contraction (option `-ffp-contract=`) is disabled
+   when `-fprotect-parens` is enabled.  Also note that in safe floating-point
+   modes, such as `-ffp-model=precise` or `-ffp-model=strict`, this option
+   has no effect because the optimizer is prohibited from making unsafe
+   transformations.
 
 .. _fp-constant-eval:
 
@@ -1614,20 +1687,28 @@ are listed below.
 
    This flag is enabled by default for sanitizers in the ``cfi`` group.
 
-.. option:: -fsanitize-blacklist=/path/to/blacklist/file
+.. option:: -fsanitize-ignorelist=/path/to/ignorelist/file
 
    Disable or modify sanitizer checks for objects (source files, functions,
    variables, types) listed in the file. See
    :doc:`SanitizerSpecialCaseList` for file format description.
 
-.. option:: -fno-sanitize-blacklist
+.. option:: -fno-sanitize-ignorelist
 
-   Don't use blacklist file, if it was specified earlier in the command line.
+   Don't use ignorelist file, if it was specified earlier in the command line.
 
 **-f[no-]sanitize-coverage=[type,features,...]**
 
    Enable simple code coverage in addition to certain sanitizers.
    See :doc:`SanitizerCoverage` for more details.
+
+**-f[no-]sanitize-address-outline-instrumentation**
+
+   Controls how address sanitizer code is generated. If enabled will always use
+   a function call instead of inlining the code. Turning this option on could
+   reduce the binary size, but might result in a worse run-time performance.
+
+   See :doc: `AddressSanitizer` for more details.
 
 **-f[no-]sanitize-stats**
 
@@ -2535,7 +2616,8 @@ below. If multiple flags are present, the last one is used.
    non-trivial, non-aggregate C++ class in the modules that contain a
    definition of one of its constructors. This relies on the additional
    assumption that all classes that are not trivially constructible have a
-   non-trivial constructor that is used somewhere.
+   non-trivial constructor that is used somewhere. The negation,
+   -fno-use-ctor-homing, ensures that constructor homing is not used.
 
    This flag is not enabled by default, and needs to be used with -cc1 or
    -Xclang.
@@ -2927,7 +3009,7 @@ tools as well as open source tools such as `SPIRV-LLVM Translator
 to produce SPIR-V binary. More details are provided in `the offline
 compilation from OpenCL kernel sources into SPIR-V using open source
 tools
-<https://www.khronos.org/blog/offline-compilation-of-opencl-kernels-into-spir-v-using-open-source-tooling>`_.
+<https://github.com/KhronosGroup/OpenCL-Guide/blob/main/chapters/os_tooling.md>`_.
 
 Clang currently supports OpenCL C language standards up to v2.0. Clang mainly
 supports full profile. There is only very limited support of the embedded
@@ -3679,8 +3761,8 @@ Execute ``clang-cl /?`` to see a list of supported options:
       -fno-sanitize-address-use-after-scope
                               Disable use-after-scope detection in AddressSanitizer
       -fno-sanitize-address-use-odr-indicator
-                              Disable ODR indicator globals
-      -fno-sanitize-blacklist Don't use blacklist file for sanitizers
+                               Disable ODR indicator globals
+      -fno-sanitize-ignorelist Don't use ignorelist file for sanitizers
       -fno-sanitize-cfi-cross-dso
                               Disable control flow integrity (CFI) checks for cross-DSO calls.
       -fno-sanitize-coverage=<value>
@@ -3724,12 +3806,14 @@ Execute ``clang-cl /?`` to see a list of supported options:
                               Enable linker dead stripping of globals in AddressSanitizer
       -fsanitize-address-poison-custom-array-cookie
                               Enable poisoning array cookies when using custom operator new[] in AddressSanitizer
+      -fsanitize-address-use-after-return=<mode>
+                              Select the mode of detecting stack use-after-return in AddressSanitizer: never | runtime (default) | always
       -fsanitize-address-use-after-scope
                               Enable use-after-scope detection in AddressSanitizer
       -fsanitize-address-use-odr-indicator
                               Enable ODR indicator globals to avoid false ODR violation reports in partially sanitized programs at the cost of an increase in binary size
-      -fsanitize-blacklist=<value>
-                              Path to blacklist file for sanitizers
+      -fsanitize-ignorelist=<value>
+                              Path to ignorelist file for sanitizers
       -fsanitize-cfi-cross-dso
                               Enable control flow integrity (CFI) checks for cross-DSO calls.
       -fsanitize-cfi-icall-generalize-pointers

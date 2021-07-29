@@ -6,7 +6,7 @@ include(CheckLibraryExists)
 include(CheckSymbolExists)
 include(TestBigEndian)
 
-function(check_linker_flag flag out_var)
+function(compiler_rt_check_linker_flag flag out_var)
   cmake_push_check_state()
   set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} ${flag}")
   check_cxx_compiler_flag("" ${out_var})
@@ -156,24 +156,24 @@ check_library_exists(c++ __cxa_throw "" COMPILER_RT_HAS_LIBCXX)
 check_library_exists(stdc++ __cxa_throw "" COMPILER_RT_HAS_LIBSTDCXX)
 
 # Linker flags.
-check_linker_flag("-Wl,-z,text" COMPILER_RT_HAS_Z_TEXT)
-check_linker_flag("-fuse-ld=lld" COMPILER_RT_HAS_FUSE_LD_LLD_FLAG)
+compiler_rt_check_linker_flag("-Wl,-z,text" COMPILER_RT_HAS_Z_TEXT)
+compiler_rt_check_linker_flag("-fuse-ld=lld" COMPILER_RT_HAS_FUSE_LD_LLD_FLAG)
 
 set(VERS_COMPAT_OPTION "-Wl,-z,gnu-version-script-compat")
-check_linker_flag("${VERS_COMPAT_OPTION}" COMPILER_RT_HAS_GNU_VERSION_SCRIPT_COMPAT)
+compiler_rt_check_linker_flag("${VERS_COMPAT_OPTION}" COMPILER_RT_HAS_GNU_VERSION_SCRIPT_COMPAT)
 
 set(DUMMY_VERS ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeTmp/dummy.vers)
 file(WRITE ${DUMMY_VERS} "{};")
 set(VERS_OPTION "-Wl,--version-script,${DUMMY_VERS}")
 if(COMPILER_RT_HAS_GNU_VERSION_SCRIPT_COMPAT)
   # Solaris 11.4 ld only supports --version-script with
-  # -z gnu-version-script-compat. 
+  # -z gnu-version-script-compat.
   string(APPEND VERS_OPTION " ${VERS_COMPAT_OPTION}")
 endif()
-check_linker_flag("${VERS_OPTION}" COMPILER_RT_HAS_VERSION_SCRIPT)
+compiler_rt_check_linker_flag("${VERS_OPTION}" COMPILER_RT_HAS_VERSION_SCRIPT)
 
 if(ANDROID)
-  check_linker_flag("-Wl,-z,global" COMPILER_RT_HAS_Z_GLOBAL)
+  compiler_rt_check_linker_flag("-Wl,-z,global" COMPILER_RT_HAS_Z_GLOBAL)
   check_library_exists(log __android_log_write "" COMPILER_RT_HAS_LIBLOG)
 endif()
 
@@ -318,7 +318,7 @@ else()
   set(ALL_FUZZER_SUPPORTED_ARCH ${X86_64} ${ARM64})
 endif()
 
-set(ALL_GWP_ASAN_SUPPORTED_ARCH ${X86} ${X86_64})
+set(ALL_GWP_ASAN_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64})
 if(APPLE)
   set(ALL_LSAN_SUPPORTED_ARCH ${X86} ${X86_64} ${MIPS64} ${ARM64})
 else()
@@ -329,13 +329,13 @@ set(ALL_HWASAN_SUPPORTED_ARCH ${X86_64} ${ARM64})
 set(ALL_MEMPROF_SUPPORTED_ARCH ${X86_64})
 set(ALL_PROFILE_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${PPC32} ${PPC64}
     ${MIPS32} ${MIPS64} ${S390X} ${SPARC} ${SPARCV9})
-set(ALL_TSAN_SUPPORTED_ARCH ${X86_64} ${MIPS64} ${ARM64} ${PPC64})
+set(ALL_TSAN_SUPPORTED_ARCH ${X86_64} ${MIPS64} ${ARM64} ${PPC64} ${S390X})
 set(ALL_UBSAN_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${RISCV64}
     ${MIPS32} ${MIPS64} ${PPC64} ${S390X} ${SPARC} ${SPARCV9})
 set(ALL_SAFESTACK_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM64} ${MIPS32} ${MIPS64})
 set(ALL_CFI_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${MIPS64})
 set(ALL_SCUDO_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${MIPS32} ${MIPS64} ${PPC64})
-set(ALL_SCUDO_STANDALONE_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64})
+set(ALL_SCUDO_STANDALONE_SUPPORTED_ARCH ${X86} ${X86_64} ${ARM32} ${ARM64} ${MIPS32} ${MIPS64} ${PPC64})
 if(APPLE)
 set(ALL_XRAY_SUPPORTED_ARCH ${X86_64})
 else()
@@ -343,7 +343,7 @@ set(ALL_XRAY_SUPPORTED_ARCH ${X86_64} ${ARM32} ${ARM64} ${MIPS32} ${MIPS64} powe
 endif()
 set(ALL_SHADOWCALLSTACK_SUPPORTED_ARCH ${ARM64})
 
-if (APPLE)
+if (UNIX)
 set(ALL_ORC_SUPPORTED_ARCH ${X86_64})
 endif()
 
@@ -437,7 +437,7 @@ if(APPLE)
     -lc++
     -lc++abi)
 
-  check_linker_flag("-fapplication-extension" COMPILER_RT_HAS_APP_EXTENSION)
+  compiler_rt_check_linker_flag("-fapplication-extension" COMPILER_RT_HAS_APP_EXTENSION)
   if(COMPILER_RT_HAS_APP_EXTENSION)
     list(APPEND DARWIN_COMMON_LINK_FLAGS "-fapplication-extension")
   endif()

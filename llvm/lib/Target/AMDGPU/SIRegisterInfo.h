@@ -111,16 +111,15 @@ public:
   void buildVGPRSpillLoadStore(SGPRSpillBuilder &SB, int Index, int Offset,
                                bool IsLoad, bool IsKill = true) const;
 
-  void buildSGPRSpillLoadStore(SGPRSpillBuilder &SB, int Offset,
-                               int64_t VGPRLanes) const;
-
   /// If \p OnlyToVGPR is true, this will only succeed if this
   bool spillSGPR(MachineBasicBlock::iterator MI,
                  int FI, RegScavenger *RS,
+                 LiveIntervals *LIS = nullptr,
                  bool OnlyToVGPR = false) const;
 
   bool restoreSGPR(MachineBasicBlock::iterator MI,
                    int FI, RegScavenger *RS,
+                   LiveIntervals *LIS = nullptr,
                    bool OnlyToVGPR = false) const;
 
   void eliminateFrameIndex(MachineBasicBlock::iterator MI, int SPAdj,
@@ -128,7 +127,8 @@ public:
                            RegScavenger *RS) const override;
 
   bool eliminateSGPRToVGPRSpillFrameIndex(MachineBasicBlock::iterator MI,
-                                          int FI, RegScavenger *RS) const;
+                                          int FI, RegScavenger *RS,
+                                          LiveIntervals *LIS = nullptr) const;
 
   StringRef getRegAsmName(MCRegister Reg) const override;
 
@@ -349,7 +349,8 @@ public:
   // When lowering spill pseudos, the RegScavenger should be set.
   // For creating spill instructions during frame lowering, where no scavenger
   // is available, LiveRegs can be used.
-  void buildSpillLoadStore(MachineBasicBlock::iterator MI, unsigned LoadStoreOp,
+  void buildSpillLoadStore(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator MI, unsigned LoadStoreOp,
                            int Index, Register ValueReg, bool ValueIsKill,
                            MCRegister ScratchOffsetReg, int64_t InstrOffset,
                            MachineMemOperand *MMO, RegScavenger *RS,

@@ -51,7 +51,7 @@ struct OnCreatedArgs {
 
 void ThreadContext::OnCreated(void *arg) {
   thr = 0;
-  if (tid == 0)
+  if (tid == kMainTid)
     return;
   OnCreatedArgs *args = static_cast<OnCreatedArgs *>(arg);
   if (!args->thr)  // GCD workers don't have a parent thread.
@@ -61,8 +61,6 @@ void ThreadContext::OnCreated(void *arg) {
   TraceAddEvent(args->thr, args->thr->fast_state, EventTypeMop, 0);
   ReleaseImpl(args->thr, 0, &sync);
   creation_stack_id = CurrentStackId(args->thr, args->pc);
-  if (reuse_count == 0)
-    StatInc(args->thr, StatThreadMaxTid);
 }
 
 void ThreadContext::OnReset() {
@@ -101,8 +99,7 @@ void ThreadContext::OnStarted(void *arg) {
 #else
   // Setup dynamic shadow stack.
   const int kInitStackSize = 8;
-  thr->shadow_stack = (uptr*)internal_alloc(MBlockShadowStack,
-      kInitStackSize * sizeof(uptr));
+  thr->shadow_stack = (uptr *)internal_alloc(kInitStackSize * sizeof(uptr));
   thr->shadow_stack_pos = thr->shadow_stack;
   thr->shadow_stack_end = thr->shadow_stack + kInitStackSize;
 #endif
@@ -115,7 +112,6 @@ void ThreadContext::OnStarted(void *arg) {
 
   thr->fast_synch_epoch = epoch0;
   AcquireImpl(thr, 0, &sync);
-  StatInc(thr, StatSyncAcquire);
   sync.Reset(&thr->proc()->clock_cache);
   thr->is_inited = true;
   DPrintf("#%d: ThreadStart epoch=%zu stk_addr=%zx stk_size=%zx "
@@ -149,9 +145,6 @@ void ThreadContext::OnFinished() {
   PlatformCleanUpThreadState(thr);
 #endif
   thr->~ThreadState();
-#if TSAN_COLLECT_STATS
-  StatAggregate(ctx->stat, thr->stat);
-#endif
   thr = 0;
 }
 
@@ -179,7 +172,7 @@ static void MaybeReportThreadLeak(ThreadContextBase *tctx_base, void *arg) {
 
 #if !SANITIZER_GO
 static void ReportIgnoresEnabled(ThreadContext *tctx, IgnoreSet *set) {
-  if (tctx->tid == 0) {
+  if (tctx->tid == kMainTid) {
     Printf("ThreadSanitizer: main thread finished with ignores enabled\n");
   } else {
     Printf("ThreadSanitizer: thread T%d %s finished with ignores enabled,"
@@ -232,13 +225,11 @@ int ThreadCount(ThreadState *thr) {
 }
 
 int ThreadCreate(ThreadState *thr, uptr pc, uptr uid, bool detached) {
-  StatInc(thr, StatThreadCreate);
   OnCreatedArgs args = { thr, pc };
   u32 parent_tid = thr ? thr->tid : kInvalidTid;  // No parent for GCD workers.
   int tid =
       ctx->thread_registry->CreateThread(uid, detached, parent_tid, &args);
   DPrintf("#%d: ThreadCreate tid=%d uid=%zu\n", parent_tid, tid, uid);
-  StatSet(thr, StatThreadMaxAlive, ctx->thread_registry->GetMaxAliveThreads());
   return tid;
 }
 
@@ -250,9 +241,10 @@ void ThreadStart(ThreadState *thr, int tid, tid_t os_id,
   uptr tls_size = 0;
 #if !SANITIZER_GO
   if (thread_type != ThreadType::Fiber)
-    GetThreadStackAndTls(tid == 0, &stk_addr, &stk_size, &tls_addr, &tls_size);
+    GetThreadStackAndTls(tid == kMainTid, &stk_addr, &stk_size, &tls_addr,
+                         &tls_size);
 
-  if (tid) {
+  if (tid != kMainTid) {
     if (stk_addr && stk_size)
       MemoryRangeImitateWrite(thr, /*pc=*/ 1, stk_addr, stk_size);
 
@@ -279,7 +271,6 @@ void ThreadStart(ThreadState *thr, int tid, tid_t os_id,
 
 void ThreadFinish(ThreadState *thr) {
   ThreadCheckIgnore(thr);
-  StatInc(thr, StatThreadFinish);
   if (thr->stk_addr && thr->stk_size)
     DontNeedShadowFor(thr->stk_addr, thr->stk_size);
   if (thr->tls_addr && thr->tls_size)
@@ -313,7 +304,7 @@ static bool ConsumeThreadByUid(ThreadContextBase *tctx, void *arg) {
 int ThreadConsumeTid(ThreadState *thr, uptr pc, uptr uid) {
   ConsumeThreadContext findCtx = {uid, nullptr};
   ctx->thread_registry->FindThread(ConsumeThreadByUid, &findCtx);
-  int tid = findCtx.tctx ? findCtx.tctx->tid : ThreadRegistry::kUnknownTid;
+  int tid = findCtx.tctx ? findCtx.tctx->tid : kInvalidTid;
   DPrintf("#%d: ThreadTid uid=%zu tid=%d\n", thr->tid, uid, tid);
   return tid;
 }
@@ -371,13 +362,10 @@ void MemoryAccessRange(ThreadState *thr, uptr pc, uptr addr,
   }
 #endif
 
-  StatInc(thr, StatMopRange);
-
   if (*shadow_mem == kShadowRodata) {
     DCHECK(!is_write);
     // Access to .rodata section, no races here.
     // Measurements show that it can be 10-20% of all memory accesses.
-    StatInc(thr, StatMopRangeRodata);
     return;
   }
 
@@ -432,7 +420,7 @@ void FiberSwitchImpl(ThreadState *from, ThreadState *to) {
 }
 
 ThreadState *FiberCreate(ThreadState *thr, uptr pc, unsigned flags) {
-  void *mem = internal_alloc(MBlockThreadContex, sizeof(ThreadState));
+  void *mem = internal_alloc(sizeof(ThreadState));
   ThreadState *fiber = static_cast<ThreadState *>(mem);
   internal_memset(fiber, 0, sizeof(*fiber));
   int tid = ThreadCreate(thr, pc, 0, true);

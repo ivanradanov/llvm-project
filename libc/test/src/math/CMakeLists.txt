@@ -1,32 +1,5 @@
 add_libc_testsuite(libc_math_unittests)
 
-function(add_fp_unittest name)
-  cmake_parse_arguments(
-    "MATH_UNITTEST"
-    "NEED_MPFR" # Optional arguments
-    "" # Single value arguments
-    "" # Multi-value arguments
-    ${ARGN}
-  )
-
-  if(MATH_UNITTEST_NEED_MPFR)
-    if(NOT LIBC_TESTS_CAN_USE_MPFR)
-      message("WARNING: Math test ${name} will be skipped as MPFR library is not available.")
-      return()
-    endif()
-  endif()
-
-  add_libc_unittest(${name} ${MATH_UNITTEST_UNPARSED_ARGUMENTS})
-  get_fq_target_name(${name} fq_target_name)
-  if (NOT TARGET ${fq_target_name})
-    return()
-  endif()
-  if(MATH_UNITTEST_NEED_MPFR)
-    target_link_libraries(${fq_target_name} PRIVATE libcMPFRWrapper -lmpfr -lgmp)
-  endif()
-  target_link_libraries(${fq_target_name} PRIVATE LibcFPTestHelpers)
-endfunction(add_fp_unittest)
-
 add_fp_unittest(
   cosf_test
   NEED_MPFR
@@ -44,6 +17,18 @@ add_fp_unittest(
 )
 
 add_fp_unittest(
+  cos_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    cos_test.cpp
+  DEPENDS
+    libc.src.math.cos
+    libc.utils.FPUtil.fputil
+)
+
+add_fp_unittest(
   sinf_test
   NEED_MPFR
   SUITE
@@ -56,6 +41,18 @@ add_fp_unittest(
     libc.include.errno
     libc.src.math.sinf
     libc.utils.CPP.standalone_cpp
+    libc.utils.FPUtil.fputil
+)
+
+add_fp_unittest(
+  sin_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    sin_test.cpp
+  DEPENDS
+    libc.src.math.sin
     libc.utils.FPUtil.fputil
 )
 
@@ -632,6 +629,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     frexp_test.cpp
+  HDRS
+    FrexpTest.h
   DEPENDS
     libc.include.math
     libc.src.math.frexp
@@ -645,6 +644,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     frexpf_test.cpp
+  HDRS
+    FrexpTest.h
   DEPENDS
     libc.include.math
     libc.src.math.frexpf
@@ -658,6 +659,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     frexpl_test.cpp
+  HDRS
+    FrexpTest.h
   DEPENDS
     libc.include.math
     libc.src.math.frexpl
@@ -778,6 +781,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     logbl_test.cpp
+  HDRS
+    LogbTest.h
   DEPENDS
     libc.include.math
     libc.src.math.logbl
@@ -790,6 +795,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     modf_test.cpp
+  HDRS
+    ModfTest.h
   DEPENDS
     libc.include.math
     libc.src.math.modf
@@ -802,6 +809,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     modff_test.cpp
+  HDRS
+    ModfTest.h
   DEPENDS
     libc.include.math
     libc.src.math.modff
@@ -814,6 +823,8 @@ add_fp_unittest(
     libc_math_unittests
   SRCS
     modfl_test.cpp
+  HDRS
+    ModfTest.h
   DEPENDS
     libc.include.math
     libc.src.math.modfl
@@ -976,7 +987,7 @@ add_fp_unittest(
 # from insufficient precision in MPFR calculations leading to
 # https://hal.archives-ouvertes.fr/hal-01091186/document. We will
 # renable after fixing the precision issue.
-if(${LIBC_TARGET_MACHINE} MATCHES "x86_64")
+if(${LIBC_TARGET_ARCHITECTURE_IS_X86})
   add_fp_unittest(
     sqrtl_test
     NEED_MPFR
@@ -1129,6 +1140,32 @@ add_fp_unittest(
   DEPENDS
     libc.include.math
     libc.src.math.fma
+    libc.utils.FPUtil.fputil
+)
+
+add_fp_unittest(
+  tan_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    tan_test.cpp
+  DEPENDS
+    libc.src.math.tan
+    libc.utils.FPUtil.fputil
+)
+
+add_fp_unittest(
+  expm1f_test
+  NEED_MPFR
+  SUITE
+    libc_math_unittests
+  SRCS
+    expm1f_test.cpp
+  DEPENDS
+    libc.include.errno
+    libc.include.math
+    libc.src.math.expm1f
     libc.utils.FPUtil.fputil
 )
 

@@ -60,7 +60,6 @@ CHECK-NEXT:      -Wuninitialized-const-reference
 CHECK-NEXT:    -Wunknown-pragmas
 CHECK-NEXT:    -Wunused
 CHECK-NEXT:      -Wunused-argument
-CHECK-NEXT:      -Wunused-but-set-variable
 CHECK-NEXT:      -Wunused-function
 CHECK-NEXT:        -Wunneeded-internal-declaration
 CHECK-NEXT:      -Wunused-label
@@ -74,6 +73,7 @@ CHECK-NEXT:        -Wunevaluated-expression
 CHECK-NEXT:          -Wpotentially-evaluated-expression
 CHECK-NEXT:      -Wunused-variable
 CHECK-NEXT:        -Wunused-const-variable
+CHECK-NEXT:      -Wunused-but-set-variable
 CHECK-NEXT:      -Wunused-property-ivar
 CHECK-NEXT:    -Wvolatile-register-var
 CHECK-NEXT:    -Wobjc-missing-super-calls
