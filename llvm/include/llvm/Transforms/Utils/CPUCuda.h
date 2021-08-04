@@ -11,12 +11,14 @@
 
 #include "llvm/IR/PassManager.h"
 
+#include <set>
+
 namespace llvm {
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
 	public:
 		PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
-		void splitBlocksAroundBarriers(BasicBlock &bb);;
+	};
 
 } // namespace llvm
 
