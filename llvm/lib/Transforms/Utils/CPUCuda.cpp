@@ -35,7 +35,7 @@ bool instrIsBarrier(Instruction *I) {
 	return false;
 }
 
-void splitBlocksAroundBarriers(Function &F) {
+void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
 	while ([&]() -> bool {
 		for (auto &bb : F) {
 			//for (auto &instruction : bb) {
@@ -52,12 +52,17 @@ void splitBlocksAroundBarriers(Function &F) {
 	}());
 }
 
-void CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
+bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
 	return blocks_after_barriers.find(BB) != blocks_after_barriers.end();
 }
 
+template <class T>
+bool in_vector(std::vector<T> v, T &key) {
+	return v.end() != std::find(v.begin(), v.end(), key);
+}
+
 void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited) {
-	if (visited.find(BB) == visited.end())
+	if (visited.find(BB) != visited.end())
 		return;
 	visited.insert(BB);
 
@@ -82,13 +87,12 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *
 		auto bb = to_walk.front();
 		to_walk.pop();
 
-		auto &first_instruction = *bb->begin();
-		if (instrIsBarrier(&first_instruction)) {
+		if (blockIsAfterBarrier(bb)) {
 			_splitFunctionAtBarriers(bb, visited);
 		} else {
 			func_bbs.push_back(bb);
 			for (auto bbb : successors(bb)) {
-				if (func_bbs.end() == std::find(func_bbs.begin(), func_bbs.end(), bbb))
+				if (!in_vector(func_bbs, bbb))
 					to_walk.push(bbb);
 			}
 		}

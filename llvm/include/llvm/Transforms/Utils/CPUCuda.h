@@ -24,7 +24,8 @@ namespace llvm {
 
 		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
 		void splitFunctionAtBarriers(Function &F);
-		void blockIsAfterBarrier(BasicBlock *BB);
+		void splitBlocksAroundBarriers(Function &F);
+		bool blockIsAfterBarrier(BasicBlock *BB);
 
 	public:
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
