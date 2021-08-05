@@ -25,7 +25,7 @@ bool callIsBarrier(CallInst *callInst) {
 	}
 }
 
-bool instrIsBarrier(Intruction *I) {
+bool instrIsBarrier(Instruction *I) {
 	auto &instruction = *I;
 	if (CallInst *callInst = dyn_cast<CallInst>(&instruction)) {
 		if (callIsBarrier(callInst)) {
@@ -42,7 +42,8 @@ void splitBlocksAroundBarriers(Function &F) {
 			for (auto _begin = ++bb.begin(); _begin != bb.end(); ++_begin) {
 				auto &instruction = *_begin;
 				if (instrIsBarrier(&instruction)) {
-					SplitBlock(&bb, &instruction);
+					auto newbb = SplitBlock(&bb, &instruction);
+					blocks_after_barriers.insert(newbb);
 					return true;
 				}
 			}
@@ -51,40 +52,54 @@ void splitBlocksAroundBarriers(Function &F) {
 	}());
 }
 
-void splitFunctionAtBarriers(Function &F) {
-	std::set<BasicBlock *> visited;
-	_splitFunctionAtBarriers(F.getEntryBlock(), visited);
+void CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
+	return blocks_after_barriers.find(BB) != blocks_after_barriers.end();
 }
 
-void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited) {
+void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited) {
 	if (visited.find(BB) == visited.end())
 		return;
 	visited.insert(BB);
 
-	StringRef nfunc_name = F->getName() + std::to_string(visited.size());
-	Type *nfunc_result_type = Type.getInt32Ty(M.getContext());
+	StringRef nfunc_name = F->getName().str() + std::to_string(visited.size());
+	Type *nfunc_result_type = Type::getInt32Ty(M->getContext());
 	ArrayRef<Type *> nfunc_params_types = ArrayRef<Type *>();
-	FunctionType * nfunc_type = FunctionType.get(nfunc_return_type, nfunc_params_types, /* isVarArg */ false);
-	Function *nfunc = M.getOrInsertFunction(new_func_name, nfunc_type);
+	FunctionType * nfunc_type = FunctionType::get(nfunc_result_type, nfunc_params_types, /* isVarArg */ false);
+	Function *nfunc = dyn_cast<Function>(M->getOrInsertFunction(nfunc_name, nfunc_type).getCallee());
+	assert(nfunc);
+
+	errs() << "generating new subkernel " << nfunc_name << "\n";
 
 	std::vector<BasicBlock *> func_bbs;
-	func_bbs.insert(BB);
+	func_bbs.push_back(BB);
 
 	std::queue<BasicBlock *> to_walk;
-	for (auto &bb : successors(BB)) {
-		to_walk.insert(&bb);
+	for (auto bb : successors(BB)) {
+		to_walk.push(bb);
 	}
 
 	while (!to_walk.empty()) {
 		auto bb = to_walk.front();
 		to_walk.pop();
 
-		auto first_instruction = *bb.begin();
-		if (instrIsBarrier(first_instruction))
+		auto &first_instruction = *bb->begin();
+		if (instrIsBarrier(&first_instruction)) {
 			_splitFunctionAtBarriers(bb, visited);
-		else
-			func_bbs.insert(bb);
+		} else {
+			func_bbs.push_back(bb);
+			for (auto bbb : successors(bb)) {
+				if (func_bbs.end() == std::find(func_bbs.begin(), func_bbs.end(), bbb))
+					to_walk.push(bbb);
+			}
+		}
 	}
+
+
+}
+
+void CPUCudaPass::splitFunctionAtBarriers(Function &F) {
+	std::set<BasicBlock *> visited;
+	_splitFunctionAtBarriers(&F.getEntryBlock(), visited);
 }
 
 void findValsUsedAcrossBarrier(Instruction &I) {
@@ -92,10 +107,15 @@ void findValsUsedAcrossBarrier(Instruction &I) {
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
-								   FunctionAnalysisManager &AM) {
-	this->M = M;
+								   AnalysisManager<Module> &AM) {
+	this->M = &M;
 	for (auto &F : M) {
-		this->F = F;
+		this->F = &F;
+		/* temp */
+		if (!F.getName().contains("mat_mul")) {
+			continue;
+		}
+
 		errs() << "processing function " << F.getName() << "\n";
 
 		splitBlocksAroundBarriers(F);

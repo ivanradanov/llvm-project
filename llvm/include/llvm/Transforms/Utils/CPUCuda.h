@@ -20,8 +20,15 @@ namespace llvm {
 		Module *M;
 		Function *F;
 
+		std::set<BasicBlock *> blocks_after_barriers;
+
+		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
+		void splitFunctionAtBarriers(Function &F);
+		void blockIsAfterBarrier(BasicBlock *BB);
+
 	public:
-		PreservedAnalyses run(Module &M, FunctionAnalysisManager &AM);
+		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
+
 	};
 
 } // namespace llvm
