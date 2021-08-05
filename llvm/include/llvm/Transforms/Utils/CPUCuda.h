@@ -16,8 +16,12 @@
 namespace llvm {
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
+	private:
+		Module *M;
+		Function *F;
+
 	public:
-		PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM);
+		PreservedAnalyses run(Module &M, FunctionAnalysisManager &AM);
 	};
 
 } // namespace llvm
