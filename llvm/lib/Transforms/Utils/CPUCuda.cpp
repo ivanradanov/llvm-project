@@ -98,15 +98,38 @@ std::vector<Value *> findValuesUsedInAndDefinedOutsideBBs(Function *f, std::vect
 	return intersection;
 }
 
-std::set<BasicBlock *> convert
+// Converts a list of bbs to the corresponding list of bbs in the newly cloned
+// function
+//
+// TODO this depends on the representation of blocks in a function - is
+// there a better way to do it?
+BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
+	std::vector<int> bb_ids;
+	int id = 0;
+	for (auto it = fold->begin(); it != fold->end(); ++it, ++id) {
+		BasicBlock *bb = &(*it);
+		if (in_vector(vold, bb)) {
+			bb_ids.push_back(id);
+		}
+	}
+	BBVector vnew;
+	id = 0;
+	for (auto it = fnew->begin(); it != fnew->end(); ++it, ++id) {
+		BasicBlock *bb = &(*it);
+		if (in_vector(bb_ids, id)) {
+			vnew.push_back(bb);
+		}
+	}
+	return vnew;
+}
 
-void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited) {
+void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	if (visited.find(BB) != visited.end())
 		return;
 	visited.insert(BB);
 
 	// BBs which are reachable without crossing a barrier from the current BB
-	std::vector<BasicBlock *> func_bbs;
+	BBVector func_bbs;
 	func_bbs.push_back(BB);
 
 	std::queue<BasicBlock *> to_walk;
@@ -138,10 +161,6 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *
 	//Function *nfunc = dyn_cast<Function>(M->getOrInsertFunction(nfunc_name, nfunc_type).getCallee());
 	//assert(nfunc);
 
-	ValueToValueMapTy VMap;
-	Function *nfunc = CloneFunction(F, VMap);
-	added_functions.insert(nfunc);
-
 	LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << visited.size() << " for " << F->getName() << "\n");
 
 	// Clone the function to get a clone of the basic blocks
@@ -169,12 +188,11 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *
 										   params, /* isVarArg */ false);
 	Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
 	                                F->getName(), F->getParent());
-	added_functions.insert(nf);
 	//F->getParent()->getFunctionList().insert(F->getIterator(), nf);
+	added_functions.insert(nf);
 	// Insert the clnoe basic blocks
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
 	_nf->eraseFromParent();
-
 
 	for (auto val : usedVals) {
 		

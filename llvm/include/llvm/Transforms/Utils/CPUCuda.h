@@ -12,8 +12,14 @@
 #include "llvm/IR/PassManager.h"
 
 #include <set>
+#include <queue>
+#include <vector>
 
 namespace llvm {
+
+	typedef std::vector<BasicBlock *> BBVector;
+	typedef std::queue<BasicBlock *> BBQueue;
+	typedef std::set<BasicBlock *> BBSet;
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
 	private:
