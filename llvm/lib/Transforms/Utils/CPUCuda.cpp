@@ -8,14 +8,18 @@
 
 #include "llvm/Transforms/Utils/CPUCuda.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/CFG.h"
 
 #include <queue>
 #include <vector>
 #include <string>
+#include <algorithm>
 
 using namespace llvm;
+
+#define DEBUG_TYPE "cpucudapass"
 
 bool callIsBarrier(CallInst *callInst) {
 	if (Function *calledFunction = callInst->getCalledFunction()) {
@@ -57,24 +61,51 @@ bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
 }
 
 template <class T>
-bool in_vector(std::vector<T> v, T &key) {
+bool in_vector(std::vector<T> &v, T key) {
 	return v.end() != std::find(v.begin(), v.end(), key);
 }
+
+template <class T>
+void print_container(T &c) {
+	for (auto &el : c) {
+		errs() << el << ", ";
+	}
+	errs() << "\n";
+}
+
+std::vector<Value *> findValuesUsedInAndDefinedOutsideBBs(Function *f, std::vector<BasicBlock *> bbs) {
+	std::vector<Value *> defined_outside;
+	std::vector<Value *> used_inside;
+	for (auto &bb : *f) {
+		if (in_vector(bbs, &bb)) {
+			for (auto &inst : bb) {
+				for (Use &u : inst.operands()) {
+					used_inside.push_back(u.get());
+				}
+			}
+		} else {
+			for (auto &inst : bb) {
+				defined_outside.push_back(static_cast<Value *>(&inst));
+			}
+		}
+	}
+	std::sort(defined_outside.begin(), defined_outside.end());
+	std::sort(used_inside.begin(), used_inside.end());
+	std::vector<Value *> intersection;
+	std::set_intersection(defined_outside.begin(), defined_outside.end(),
+	                      used_inside.begin(), used_inside.end(),
+	                      std::back_inserter(intersection));
+	return intersection;
+}
+
+std::set<BasicBlock *> convert
 
 void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited) {
 	if (visited.find(BB) != visited.end())
 		return;
 	visited.insert(BB);
 
-	StringRef nfunc_name = F->getName().str() + std::to_string(visited.size());
-	Type *nfunc_result_type = Type::getInt32Ty(M->getContext());
-	ArrayRef<Type *> nfunc_params_types = ArrayRef<Type *>();
-	FunctionType * nfunc_type = FunctionType::get(nfunc_result_type, nfunc_params_types, /* isVarArg */ false);
-	Function *nfunc = dyn_cast<Function>(M->getOrInsertFunction(nfunc_name, nfunc_type).getCallee());
-	assert(nfunc);
-
-	errs() << "generating new subkernel " << nfunc_name << "\n";
-
+	// BBs which are reachable without crossing a barrier from the current BB
 	std::vector<BasicBlock *> func_bbs;
 	func_bbs.push_back(BB);
 
@@ -87,6 +118,8 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *
 		auto bb = to_walk.front();
 		to_walk.pop();
 
+		func_bbs.push_back(bb);
+
 		if (blockIsAfterBarrier(bb)) {
 			_splitFunctionAtBarriers(bb, visited);
 		} else {
@@ -98,16 +131,72 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *
 		}
 	}
 
+	//StringRef nfunc_name = F->getName().str() + std::to_string(visited.size());
+	//Type *nfunc_result_type = Type::getInt32Ty(M->getContext());
+	//ArrayRef<Type *> nfunc_params_types = ArrayRef<Type *>();
+	//FunctionType * nfunc_type = FunctionType::get(nfunc_result_type, nfunc_params_types, /* isVarArg */ false);
+	//Function *nfunc = dyn_cast<Function>(M->getOrInsertFunction(nfunc_name, nfunc_type).getCallee());
+	//assert(nfunc);
+
+	ValueToValueMapTy VMap;
+	Function *nfunc = CloneFunction(F, VMap);
+	added_functions.insert(nfunc);
+
+	LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << visited.size() << " for " << F->getName() << "\n");
+
+	// Clone the function to get a clone of the basic blocks
+	ValueToValueMapTy VMap;
+	Function *_nf = CloneFunction(F, VMap);
+
+	// Convert references of basic blocks to the cloned function
+	std::vector<BasicBlock *> nfunc_bbs = convert_bb_vector(func_bbs, F, _nf);
+
+	// Find values used in and defined outside the BBs
+	auto usedVals = findValuesUsedInAndDefinedOutsideBBs(_nf, nfunc_bbs);
+	print_container(usedVals);
+
+	// Make them the arguments to the function
+	std::vector<Type *> params;
+	for (auto val : usedVals) {
+		LLVM_DEBUG(dbgs() << "value " << val->getName()
+		           << " with type " << val->getType()
+		           << " is live, add it as a param\n");
+		params.push_back(val->getType());
+	}
+
+	// Make a new fucntion which will be the subkernel
+	FunctionType *nfty = FunctionType::get(Type::getInt32Ty(M->getContext()),
+										   params, /* isVarArg */ false);
+	Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
+	                                F->getName(), F->getParent());
+	added_functions.insert(nf);
+	//F->getParent()->getFunctionList().insert(F->getIterator(), nf);
+	// Insert the clnoe basic blocks
+	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
+	_nf->eraseFromParent();
+
+
+	for (auto val : usedVals) {
+		
+	}
+
+	// Erase unneeded basic blocks
+	/*
+	for (auto &bb : *nfunc) {
+		if (!in_vector(func_bbs, &bb))
+			bb.eraseFromParent();
+	}
+	*/
+
+	// Add jump to starting block
+
+	// Add return from exiting blocks
 
 }
 
 void CPUCudaPass::splitFunctionAtBarriers(Function &F) {
 	std::set<BasicBlock *> visited;
 	_splitFunctionAtBarriers(&F.getEntryBlock(), visited);
-}
-
-void findValsUsedAcrossBarrier(Instruction &I) {
-
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
@@ -117,6 +206,10 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 		this->F = &F;
 		/* temp */
 		if (!F.getName().contains("mat_mul")) {
+			continue;
+		}
+
+		if (added_functions.find(&F) != added_functions.end()) {
 			continue;
 		}
 

@@ -21,6 +21,7 @@ namespace llvm {
 		Function *F;
 
 		std::set<BasicBlock *> blocks_after_barriers;
+		std::set<Function *> added_functions;
 
 		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
 		void splitFunctionAtBarriers(Function &F);
@@ -34,4 +35,4 @@ namespace llvm {
 
 } // namespace llvm
 
-#endif // LLVM_TRANSFORMS_UTILS_HELLOWORLD_H
+#endif // LLVM_TRANSFORMS_UTILS_CPUCUDA_H
