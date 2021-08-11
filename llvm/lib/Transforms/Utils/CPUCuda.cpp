@@ -190,21 +190,34 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	                                F->getName(), F->getParent());
 	//F->getParent()->getFunctionList().insert(F->getIterator(), nf);
 	added_functions.insert(nf);
-	// Insert the clnoe basic blocks
+	// Insert the cloned basic blocks
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
+	nf->takeName(_nf);
+
+	// Transfer usages of the usedVals to the arguments to the function
+	{
+		Function::arg_iterator I = nf->arg_begin(), E = nf->arg_end();
+		auto I2 = usedVals.begin(), E2 = usedVals.end();
+		for (; I != E; ++I, ++I2) {
+			(*I2)->replaceAllUsesWith(&*I);
+			I->takeName(*I2);
+		}
+		assert(I2 == E2);
+	}
+
+	LLVM_DEBUG(M->dump());
+
 	_nf->eraseFromParent();
 
-	for (auto val : usedVals) {
-		
-	}
-
 	// Erase unneeded basic blocks
-	/*
-	for (auto &bb : *nfunc) {
+	BBVector to_remove;
+	for (auto &bb : *nf) {
 		if (!in_vector(func_bbs, &bb))
-			bb.eraseFromParent();
+			to_remove.insert(to_remove.begin(), &bb);
 	}
-	*/
+	for (auto &bb : to_remove) {
+		bb->eraseFromParent();
+	}
 
 	// Add jump to starting block
 
