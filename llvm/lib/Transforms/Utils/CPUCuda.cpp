@@ -76,6 +76,11 @@ void print_container(T &c) {
 std::vector<Value *> findValuesUsedInAndDefinedOutsideBBs(Function *f, std::vector<BasicBlock *> bbs) {
 	std::vector<Value *> defined_outside;
 	std::vector<Value *> used_inside;
+	// Function arguments
+	for (auto &arg: f->args()) {
+		defined_outside.push_back(static_cast<Value *>(&arg));
+	}
+	// Values in basic blocks
 	for (auto &bb : *f) {
 		if (in_vector(bbs, &bb)) {
 			for (auto &inst : bb) {
@@ -192,6 +197,11 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	added_functions.insert(nf);
 	// Insert the cloned basic blocks
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
+	/*
+	for (auto bb : nfunc_bbs) {
+		nf->getBasicBlockList().push_back(nf->end(), bb);
+	}
+	*/
 	nf->takeName(_nf);
 
 	// Transfer usages of the usedVals to the arguments to the function
@@ -207,21 +217,48 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 
 	LLVM_DEBUG(M->dump());
 
-	_nf->eraseFromParent();
+
+	// Clone metadata from the old function
+	{
+		SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
+		_nf->getAllMetadata(MDs);
+		for (auto MD : MDs)
+			nf->addMetadata(MD.first, *MD.second);
+	}
+	// At this point, the unused basic blocks in nf might still use the
+	// arguments of _nf so we cannot delete it yet
+
+	LLVM_DEBUG(M->dump());
+
+	// Add return from exiting blocks
+	for (auto &bb : nfunc_bbs) {
+		Instruction *term = bb->getTerminator();
+		if ((BranchInst *branch = dyn_cast<BranchInst>(&inst))) {
+			if (branch->getNumSuccessors() == 1) {
+
+			}
+		}
+	}
 
 	// Erase unneeded basic blocks
 	BBVector to_remove;
 	for (auto &bb : *nf) {
-		if (!in_vector(func_bbs, &bb))
+		if (!in_vector(nfunc_bbs, &bb))
 			to_remove.insert(to_remove.begin(), &bb);
 	}
 	for (auto &bb : to_remove) {
+		for (auto &inst : *bb) {
+			if (!inst.use_empty())
+				inst.replaceAllUsesWith(UndefValue::get(inst.getType()));
+		}
 		bb->eraseFromParent();
 	}
 
+	// Delete the dead function
+	_nf->eraseFromParent();
+
 	// Add jump to starting block
 
-	// Add return from exiting blocks
 
 }
 
