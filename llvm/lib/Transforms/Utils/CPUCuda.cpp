@@ -11,6 +11,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/InstVisitor.h"
 
 #include <queue>
 #include <vector>
@@ -128,6 +129,109 @@ BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
 	return vnew;
 }
 
+// TODO: additionally to the BB id to continue from, will probably need to
+// return value to indicate the type of barrier that was hit
+struct TransformTerminator : public InstVisitor<TransformTerminator> {
+
+	BBVector &nfunc_bbs;
+	LLVMContext &C;
+
+	// Label type for which BB id we should continue from after we return or we
+	// have come from
+	Type *BBIdType;
+
+	TransformTerminator(BBVector &nfunc_bbs, LLVMContext &C):
+		nfunc_bbs(nfunc_bbs),
+		C(C) {
+		BBIdType = llvm::IntegerType::getInt32Ty(C);
+	}
+
+	BasicBlock *createNewRetBB(Function *F, int RetLabel) {
+		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
+		ReturnInst::Create(F->getContext(), getReturnValue(RetLabel), NewBB);
+		return NewBB;
+	}
+
+	BasicBlock *createNewRetBB(Function *F, Value *RetValue) {
+		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
+		ReturnInst::Create(F->getContext(), RetValue, NewBB);
+		return NewBB;
+	}
+
+	Value *getReturnValue(int ContLabel) {
+		Constant *return_val = llvm::ConstantInt::get(BBIdType,
+		                                              /* value */ ContLabel,
+		                                              /* isSigned */ true);
+		return static_cast<Value *>(return_val);
+	}
+
+	Value *getReturnValue(int ContLabel, int FromLabel) {
+		Constant *cont_label = llvm::ConstantInt::get(BBIdType,
+													  /* value */ ContLabel,
+													  /* isSigned */ true);
+		Constant *from_label = llvm::ConstantInt::get(BBIdType,
+													  /* value */ FromLabel,
+													  /* isSigned */ true);
+		ArrayRef<Constant *> fields(std::vector<Constant *>({cont_label, from_label}));
+		Constant *ReturnVal = ConstantStruct::getAnon(C, fields);
+		return static_cast<Value *>(ReturnVal);
+	}
+
+	// get a unique positive ID of the BB (in the original kernel)
+	int getId(BasicBlock *BB) {
+		// TODO: implement
+		return 1;
+	}
+
+	void visitReturnInst(ReturnInst &I) {
+		LLVM_DEBUG(dbgs() << "Transforming ReturnInst " << I << "\n");
+		// -1 stands for return
+		ReturnInst::Create(I.getContext(), getReturnValue(-1), I.getParent());
+		I.eraseFromParent();
+	}
+
+	void visitBranchInst(BranchInst &I) {
+		LLVM_DEBUG(dbgs() << "Transforming BranchInst " << I << "\n");
+		Function *F = I.getFunction();
+		for (unsigned i = 0; i < I.getNumSuccessors(); i++) {
+			BasicBlock *succ = I.getSuccessor(i);
+			if (!in_vector(nfunc_bbs, succ)) {
+				BasicBlock *RetBB = createNewRetBB(F, getReturnValue(getId(succ), getId(I.getParent())));
+				I.setSuccessor(i, RetBB);
+			}
+		}
+	}
+
+	void visitSwitchInst(SwitchInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitIndirectBrInst(IndirectBrInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitResumeInst(ResumeInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitUnreachableInst(UnreachableInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitCleanupReturnInst(CleanupReturnInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitCatchReturnInst(CatchReturnInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+	void visitCatchSwitchInst(CatchSwitchInst &I) {
+		assert(false && "Not yet implemented");
+	}
+
+};
+
 void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	if (visited.find(BB) != visited.end())
 		return;
@@ -159,13 +263,6 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 		}
 	}
 
-	//StringRef nfunc_name = F->getName().str() + std::to_string(visited.size());
-	//Type *nfunc_result_type = Type::getInt32Ty(M->getContext());
-	//ArrayRef<Type *> nfunc_params_types = ArrayRef<Type *>();
-	//FunctionType * nfunc_type = FunctionType::get(nfunc_result_type, nfunc_params_types, /* isVarArg */ false);
-	//Function *nfunc = dyn_cast<Function>(M->getOrInsertFunction(nfunc_name, nfunc_type).getCallee());
-	//assert(nfunc);
-
 	LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << visited.size() << " for " << F->getName() << "\n");
 
 	// Clone the function to get a clone of the basic blocks
@@ -193,15 +290,10 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 										   params, /* isVarArg */ false);
 	Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
 	                                F->getName(), F->getParent());
-	//F->getParent()->getFunctionList().insert(F->getIterator(), nf);
 	added_functions.insert(nf);
 	// Insert the cloned basic blocks
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
-	/*
-	for (auto bb : nfunc_bbs) {
-		nf->getBasicBlockList().push_back(nf->end(), bb);
-	}
-	*/
+
 	nf->takeName(_nf);
 
 	// Transfer usages of the usedVals to the arguments to the function
@@ -215,9 +307,6 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 		assert(I2 == E2);
 	}
 
-	LLVM_DEBUG(M->dump());
-
-
 	// Clone metadata from the old function
 	{
 		SmallVector<std::pair<unsigned, MDNode *>, 1> MDs;
@@ -228,34 +317,38 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	// At this point, the unused basic blocks in nf might still use the
 	// arguments of _nf so we cannot delete it yet
 
-	LLVM_DEBUG(M->dump());
 
 	// Add return from exiting blocks
 	for (auto &bb : nfunc_bbs) {
 		Instruction *term = bb->getTerminator();
-		if ((BranchInst *branch = dyn_cast<BranchInst>(&inst))) {
-			if (branch->getNumSuccessors() == 1) {
-
-			}
-		}
+		TransformTerminator transformer(nfunc_bbs, M->getContext());
+		transformer.visit(term);
 	}
 
+	LLVM_DEBUG(M->dump());
 	// Erase unneeded basic blocks
-	BBVector to_remove;
-	for (auto &bb : *nf) {
-		if (!in_vector(nfunc_bbs, &bb))
-			to_remove.insert(to_remove.begin(), &bb);
-	}
-	for (auto &bb : to_remove) {
-		for (auto &inst : *bb) {
-			if (!inst.use_empty())
-				inst.replaceAllUsesWith(UndefValue::get(inst.getType()));
+	{
+		BBVector to_remove;
+		for (auto &bb : *nf) {
+			if (!in_vector(nfunc_bbs, &bb))
+				to_remove.insert(to_remove.begin(), &bb);
 		}
-		bb->eraseFromParent();
+		for (auto &bb : to_remove) {
+			// Entry BB for jumping from for phi instruction
+			BasicBlock *EntryBB = BasicBlock::Create(M->getContext(), "entry_block", F);
+			for (auto &inst : *bb) {
+				if (!inst.use_empty())
+					inst.replaceAllUsesWith(UndefValue::get(inst.getType()));
+			}
+			bb->replaceAllUsesWith(EntryBB);
+			bb->eraseFromParent();
+		}
 	}
+	LLVM_DEBUG(M->dump());
 
 	// Delete the dead function
 	_nf->eraseFromParent();
+	LLVM_DEBUG(M->dump());
 
 	// Add jump to starting block
 
