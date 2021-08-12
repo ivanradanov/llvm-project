@@ -22,19 +22,22 @@ namespace llvm {
 	typedef std::set<BasicBlock *> BBSet;
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
-	private:
+	public:
 		Module *M;
 		Function *F;
 
 		std::set<BasicBlock *> blocks_after_barriers;
 		std::set<Function *> added_functions;
 
+		// Label type for which BB id we should continue from after we return or we
+		// have come from
+		Type *BBIdType;
+
 		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
 		void splitFunctionAtBarriers(Function &F);
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
 
-	public:
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 
 	};

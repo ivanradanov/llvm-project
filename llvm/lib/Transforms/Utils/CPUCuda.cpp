@@ -139,11 +139,13 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 	// Label type for which BB id we should continue from after we return or we
 	// have come from
 	Type *BBIdType;
+	CPUCudaPass *Pass;
 
-	TransformTerminator(BBVector &nfunc_bbs, LLVMContext &C):
+	TransformTerminator(BBVector &nfunc_bbs, CPUCudaPass *Pass):
 		nfunc_bbs(nfunc_bbs),
-		C(C) {
-		BBIdType = llvm::IntegerType::getInt32Ty(C);
+		C(Pass->M->getContext()),
+		Pass(Pass) {
+		BBIdType = Pass->BBIdType;
 	}
 
 	BasicBlock *createNewRetBB(Function *F, int RetLabel) {
@@ -186,7 +188,8 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 	void visitReturnInst(ReturnInst &I) {
 		LLVM_DEBUG(dbgs() << "Transforming ReturnInst " << I << "\n");
 		// -1 stands for return
-		ReturnInst::Create(I.getContext(), getReturnValue(-1), I.getParent());
+		Value *RetVal = getReturnValue(-1, getId(I.getParent()));
+		ReturnInst::Create(I.getContext(), RetVal, I.getParent());
 		I.eraseFromParent();
 	}
 
@@ -277,13 +280,19 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	print_container(usedVals);
 
 	// Make them the arguments to the function
-	std::vector<Type *> params;
+	std::vector<Type *> valparams;
 	for (auto val : usedVals) {
 		LLVM_DEBUG(dbgs() << "value " << val->getName()
 		           << " with type " << val->getType()
 		           << " is live, add it as a param\n");
-		params.push_back(val->getType());
+		valparams.push_back(val->getType());
 	}
+	StructType *ValArgs = StructType::get(M->getContext(), ArrayRef<Type *>(valparams));
+	std::vector<Type *> params;
+	// Values to be preserved between subkernel calls
+	params.push_back(ValArgs);
+	// The id of the BB we retuned from in the previous subkernel
+	params.push_back(BBIdType);
 
 	// Make a new fucntion which will be the subkernel
 	FunctionType *nfty = FunctionType::get(Type::getInt32Ty(M->getContext()),
@@ -321,7 +330,7 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 	// Add return from exiting blocks
 	for (auto &bb : nfunc_bbs) {
 		Instruction *term = bb->getTerminator();
-		TransformTerminator transformer(nfunc_bbs, M->getContext());
+		TransformTerminator transformer(nfunc_bbs, this);
 		transformer.visit(term);
 	}
 
@@ -363,6 +372,9 @@ void CPUCudaPass::splitFunctionAtBarriers(Function &F) {
 PreservedAnalyses CPUCudaPass::run(Module &M,
 								   AnalysisManager<Module> &AM) {
 	this->M = &M;
+
+	BBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
+
 	for (auto &F : M) {
 		this->F = &F;
 		/* temp */
