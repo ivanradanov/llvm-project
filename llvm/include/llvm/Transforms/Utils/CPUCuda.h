@@ -17,9 +17,18 @@
 
 namespace llvm {
 
-	typedef std::vector<BasicBlock *> BBVector;
-	typedef std::queue<BasicBlock *> BBQueue;
-	typedef std::set<BasicBlock *> BBSet;
+	using std::vector;
+	using std::set;
+	using std::map;
+
+	typedef vector<BasicBlock *> BBVector;
+	typedef queue<BasicBlock *> BBQueue;
+	typedef set<BasicBlock *> BBSet;
+
+	typedef vector<Value *> ValueVector;
+
+	typedef SubkernelIdType int;
+
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
 	public:
@@ -29,9 +38,16 @@ namespace llvm {
 		std::set<BasicBlock *> blocks_after_barriers;
 		std::set<Function *> added_functions;
 
+		set<SubkernelIdType> SubkernelIds;
+		map<SubkernelIdType, BBVector> SubkernelBBs;
+		map<SubkernelIdType, BBVector> SubkernelFs;
+		map<SubkernelIdType, map<SubkernelId, ValueVector>> SubkernelUsedVals;
+
+
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
 		Type *BBIdType;
+		StructType *SubkernelReturnType;
 
 		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
 		void splitFunctionAtBarriers(Function &F);

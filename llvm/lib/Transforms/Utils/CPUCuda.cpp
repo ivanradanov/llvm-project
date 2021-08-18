@@ -74,9 +74,9 @@ void print_container(T &c) {
 	errs() << "\n";
 }
 
-std::vector<Value *> findValuesUsedInAndDefinedOutsideBBs(Function *f, std::vector<BasicBlock *> bbs) {
-	std::vector<Value *> defined_outside;
-	std::vector<Value *> used_inside;
+ValueVector findValuesUsedInAndDefinedOutsideBBs(Function *f, BBVector bbs) {
+	ValueVector defined_outside;
+	ValueVector used_inside;
 	// Function arguments
 	for (auto &arg: f->args()) {
 		defined_outside.push_back(static_cast<Value *>(&arg));
@@ -97,7 +97,7 @@ std::vector<Value *> findValuesUsedInAndDefinedOutsideBBs(Function *f, std::vect
 	}
 	std::sort(defined_outside.begin(), defined_outside.end());
 	std::sort(used_inside.begin(), used_inside.end());
-	std::vector<Value *> intersection;
+	ValueVector intersection;
 	std::set_intersection(defined_outside.begin(), defined_outside.end(),
 	                      used_inside.begin(), used_inside.end(),
 	                      std::back_inserter(intersection));
@@ -235,7 +235,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
 };
 
-void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
+void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 	if (visited.find(BB) != visited.end())
 		return;
 	visited.insert(BB);
@@ -266,11 +266,51 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 		}
 	}
 
-	LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << visited.size() << " for " << F->getName() << "\n");
+	SubkernelIdType SK = SubkernelIds.size();
+	SubkernelIds.push_back(SK);
+	SubkernelBBs[SK] = func_bbs;
 
-	// Clone the function to get a clone of the basic blocks
-	ValueToValueMapTy VMap;
-	Function *_nf = CloneFunction(F, VMap);
+}
+
+void CPUCudaPass::createSubkernelFunctionClones() {
+	for (auto SK : SubkernelIds) {
+		LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << SK << "\n");
+		ValueToValueMapTy VMap;
+		// Clone the function to get a clone of the basic blocks
+		Function *NF = CloneFunction(F, VMap);
+		SubkernelFs[SK] = NF;
+	}
+}
+
+void CPUCudaPass::findSubkernelUsedVals() {
+	for (auto SK : SubkernelIds) {
+		for (auto _SK : SubkernelIds) {
+			// Convert references of basic blocks to the cloned function
+			BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], F, SubkernelFs[SK]);
+			ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(_nf, NFuncBBs);
+			SubkernelUsedVals[SK][_SK] = UsedVals;
+		}
+  }
+}
+
+set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
+	set<SubkernelIdType> Successors;
+	for (auto BB : SubkernelBBs[SK]) {
+    for (auto bb : successors(BB)) {
+	    bool added = false;
+	    for (auto _SK : SubkernelIds) {
+		    if (in_vector(SubkernelBBs[_SK], bb)) {
+			    Successors.insert(_SK);
+			    assert(!added && "There should be only one successor for a single BB");
+			    added = true;
+		    }
+	    }
+    }
+  }
+	return Successors;
+}
+
+
 
 	// Convert references of basic blocks to the cloned function
 	std::vector<BasicBlock *> nfunc_bbs = convert_bb_vector(func_bbs, F, _nf);
@@ -364,29 +404,34 @@ void CPUCudaPass::_splitFunctionAtBarriers(BasicBlock *BB, BBSet &visited) {
 
 }
 
-void CPUCudaPass::splitFunctionAtBarriers(Function &F) {
+void CPUCudaPass::findSubkernelBBs(Function &F) {
 	std::set<BasicBlock *> visited;
-	_splitFunctionAtBarriers(&F.getEntryBlock(), visited);
+	_findSubkernelBBs(&F.getEntryBlock(), visited);
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
 								   AnalysisManager<Module> &AM) {
 	this->M = &M;
+	// TODO is it needed to reset class members? does this class get newly created
+	// for each module?
 
 	BBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
 
 	for (auto &F : M) {
 		this->F = &F;
-		/* temp */
+		// TODO make a clang attribute for this
 		if (!F.getName().contains("mat_mul")) {
 			continue;
 		}
 
+		// Will be unneeded when we add the clang attrib
 		if (added_functions.find(&F) != added_functions.end()) {
 			continue;
 		}
 
 		errs() << "processing function " << F.getName() << "\n";
+
+		findSubkernelBBs(F);
 
 		splitBlocksAroundBarriers(F);
 		splitFunctionAtBarriers(F);
