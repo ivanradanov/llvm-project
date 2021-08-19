@@ -14,20 +14,24 @@
 #include <set>
 #include <queue>
 #include <vector>
+#include <map>
 
 namespace llvm {
 
 	using std::vector;
 	using std::set;
 	using std::map;
+	using std::queue;
 
 	typedef vector<BasicBlock *> BBVector;
 	typedef queue<BasicBlock *> BBQueue;
 	typedef set<BasicBlock *> BBSet;
 
 	typedef vector<Value *> ValueVector;
+	typedef vector<Type *> TypeVector;
 
-	typedef SubkernelIdType int;
+	typedef int SubkernelIdType;
+	typedef int BBIdType;
 
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
@@ -40,8 +44,9 @@ namespace llvm {
 
 		set<SubkernelIdType> SubkernelIds;
 		map<SubkernelIdType, BBVector> SubkernelBBs;
-		map<SubkernelIdType, BBVector> SubkernelFs;
-		map<SubkernelIdType, map<SubkernelId, ValueVector>> SubkernelUsedVals;
+		map<SubkernelIdType, Function *> SubkernelFs;
+		map<SubkernelIdType, map<SubkernelIdType, ValueVector>> SubkernelUsedVals;
+		map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
 
 
 		// Label type for which BB id we should continue from after we return or we
@@ -50,12 +55,19 @@ namespace llvm {
 		Type *LLVMSubkernelIdType;
 		Type *SubkernelReturnType;
 
-		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
-		void splitFunctionAtBarriers(Function &F);
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
-
-		set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
+		void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
+		void findSubkernelUsedVals();
+		void createSubkernelFunctionClones();
+		set<SubkernelIdType> getSubkernelSuccessors(SubkernelIdType SK);
+		Type *getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK);
+		Type *getSubkernelsReturnType();
+		void assignBBIds();
+		TypeVector getSubkernelParams(SubkernelIdType SK);
+		void transformSubkernels(SubkernelIdType SK);
+		void findSubkernelBBs(Function &F);
+		void createSubkernels(Function &F);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

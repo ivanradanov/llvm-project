@@ -134,6 +134,7 @@ BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
 // return value to indicate the type of barrier that was hit
 struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
+	SubkernelIdType SK;
 	BBVector &nfunc_bbs;
 	LLVMContext &C;
 
@@ -142,11 +143,10 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 	Type *BBIdType;
 	CPUCudaPass *Pass;
 
-	TransformTerminator(BBVector &nfunc_bbs, CPUCudaPass *Pass):
-		nfunc_bbs(nfunc_bbs),
+	TransformTerminator(SubkernelIdType SK, CPUCudaPass *Pass):
+		SK(SK),
 		C(Pass->M->getContext()),
 		Pass(Pass) {
-		BBIdType = Pass->BBIdType;
 	}
 
 	BasicBlock *createNewRetBB(Function *F, int RetLabel) {
@@ -166,6 +166,11 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 		                                              /* value */ ContLabel,
 		                                              /* isSigned */ true);
 		return static_cast<Value *>(return_val);
+	}
+
+	BasicBlock *createNewRetBB(Function *F) {
+		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
+		AllocaInst(Pass->SubkernelReturnType, 
 	}
 
 	Value *getReturnValue(int ContLabel, int FromLabel) {
@@ -257,7 +262,7 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 		func_bbs.push_back(bb);
 
 		if (blockIsAfterBarrier(bb)) {
-			_splitFunctionAtBarriers(bb, visited);
+			_findSubkernelBBs(bb, visited);
 		} else {
 			func_bbs.push_back(bb);
 			for (auto bbb : successors(bb)) {
@@ -268,7 +273,7 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 	}
 
 	SubkernelIdType SK = SubkernelIds.size();
-	SubkernelIds.push_back(SK);
+	SubkernelIds.insert(SK);
 	SubkernelBBs[SK] = func_bbs;
 
 }
@@ -288,7 +293,7 @@ void CPUCudaPass::findSubkernelUsedVals() {
 		for (auto _SK : SubkernelIds) {
 			// Convert references of basic blocks to the cloned function
 			BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], F, SubkernelFs[SK]);
-			ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(_nf, NFuncBBs);
+			ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(SubkernelFs[SK], NFuncBBs);
 			SubkernelUsedVals[SK][_SK] = UsedVals;
 		}
   }
@@ -317,16 +322,16 @@ Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, Subke
 	for (auto Val : UsedVals) {
 		types.push_back(Val->getType());
 	}
-	return StructType::get(M.getContext(), ArrayRef<Types *>(types));
+	return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
 Type *CPUCudaPass::getSubkernelsReturnType() {
-	TypeSize maxSize;
+	TypeSize maxSize = TypeSize::Fixed(0);
 	for (auto SK : SubkernelIds) {
     set<SubkernelIdType> SKSuccs = getSubkernelSuccessors(SK);
     for (auto SuccSK : SKSuccs) {
       Type *DataFieldType = getSubkernelReturnDataFieldType(SK, SuccSK);
-      TypeSize size = getTypeAllocSize(DataFieldType);
+      TypeSize size = M->getDataLayout().getTypeAllocSize(DataFieldType);
       if (size > maxSize)
         maxSize = size;
     }
@@ -338,39 +343,57 @@ Type *CPUCudaPass::getSubkernelsReturnType() {
 	types.push_back(LLVMSubkernelIdType);
 	// Memory for the data struct which will be cast to the appropriate struct
 	// type for the from/to subkernel pair
-	types.push_back(ArrayType::get(Type::getInt8Ty(), maxSize()));
-	return StructType::get(M.getContext(), ArrayRef<Types *>(types))
+	types.push_back(ArrayType::get(Type::getInt8Ty(M->getContext()), maxSize));
+	return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
-void CPUCudaPass::() {
+void CPUCudaPass::assignBBIds() {
+	for (auto SK : SubkernelIds) {
+		Function *F = SubkernelFs[SK];
+		std::vector<int> bb_ids;
+		int id = 0;
+		for (auto it = F->begin(); it != F->end(); ++it, ++id) {
+			BasicBlock *bb = &(*it);
+			SubkernelBBIds[SK][bb] = id;
+		}
+	}
 }
 
+TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
+	// Get values used in and defined outside the BBs, i.e. the ones that should
+	// be used as an input
+	auto usedVals = SubkernelUsedVals[SK][SK];
 
-	// Convert references of basic blocks to the cloned function
-	std::vector<BasicBlock *> nfunc_bbs = convert_bb_vector(func_bbs, F, _nf);
-
-	// Find values used in and defined outside the BBs
-	auto usedVals = findValuesUsedInAndDefinedOutsideBBs(_nf, nfunc_bbs);
-	print_container(usedVals);
-
-	// Make them the arguments to the function
+	// Construct the data struct param
 	std::vector<Type *> valparams;
 	for (auto val : usedVals) {
-		LLVM_DEBUG(dbgs() << "value " << val->getName()
-		           << " with type " << val->getType()
-		           << " is live, add it as a param\n");
 		valparams.push_back(val->getType());
 	}
 	StructType *ValArgs = StructType::get(M->getContext(), ArrayRef<Type *>(valparams));
-	std::vector<Type *> params;
+
+	TypeVector params;
+	// The id of the BB we retuned from in the previous subkernel (for phi instr)
+	params.push_back(LLVMBBIdType);
 	// Values to be preserved between subkernel calls
 	params.push_back(ValArgs);
-	// The id of the BB we retuned from in the previous subkernel
-	params.push_back(BBIdType);
 
-	// Make a new fucntion which will be the subkernel
-	FunctionType *nfty = FunctionType::get(Type::getInt32Ty(M->getContext()),
-										   params, /* isVarArg */ false);
+	return params;
+}
+
+void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
+	Function *_nf = SubkernelFs[SK];
+	// Convert references of basic blocks to the cloned function
+	std::vector<BasicBlock *> nfunc_bbs = SubkernelBBs[SK];
+
+	auto usedVals = SubkernelUsedVals[SK][SK];
+
+	TypeVector params = getSubkernelParams(SK);
+
+	// Make a new function which will be the subkernel
+	FunctionType *nfty = FunctionType::get(
+		/* return type */ SubkernelReturnType,
+		/* params */ params,
+		/* isVarArg */ false);
 	Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
 	                                F->getName(), F->getParent());
 	added_functions.insert(nf);
@@ -404,7 +427,7 @@ void CPUCudaPass::() {
 	// Add return from exiting blocks
 	for (auto &bb : nfunc_bbs) {
 		Instruction *term = bb->getTerminator();
-		TransformTerminator transformer(nfunc_bbs, this);
+		TransformTerminator transformer(SK, this);
 		transformer.visit(term);
 	}
 
@@ -447,6 +470,10 @@ void CPUCudaPass::createSubkernels(Function &F) {
 	createSubkernelFunctionClones();
 	findSubkernelUsedVals();
 	SubkernelReturnType = getSubkernelsReturnType();
+	assignBBIds();
+	for (auto SK : SubkernelIds) {
+		transformSubkernels(SK);
+	}
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
@@ -455,7 +482,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 	// TODO is it needed to reset class members? does this class get newly created
 	// for each module?
 
-	BBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
+	LLVMBBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
 
 	for (auto &F : M) {
 		this->F = &F;
