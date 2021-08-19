@@ -46,13 +46,16 @@ namespace llvm {
 
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
-		Type *BBIdType;
-		StructType *SubkernelReturnType;
+		Type *LLVMBBIdType;
+		Type *LLVMSubkernelIdType;
+		Type *SubkernelReturnType;
 
 		void _splitFunctionAtBarriers(BasicBlock *BB, std::set<BasicBlock *> &visited);
 		void splitFunctionAtBarriers(Function &F);
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
+
+		set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

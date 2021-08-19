@@ -12,6 +12,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/InstVisitor.h"
+#include "llvm/IR/DataLayout.h"
 
 #include <queue>
 #include <vector>
@@ -310,6 +311,39 @@ set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
 	return Successors;
 }
 
+Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
+	auto UsedVals = SubkernelUsedVals[FromSK][SuccSK];
+	vector<Type *> types;
+	for (auto Val : UsedVals) {
+		types.push_back(Val->getType());
+	}
+	return StructType::get(M.getContext(), ArrayRef<Types *>(types));
+}
+
+Type *CPUCudaPass::getSubkernelsReturnType() {
+	TypeSize maxSize;
+	for (auto SK : SubkernelIds) {
+    set<SubkernelIdType> SKSuccs = getSubkernelSuccessors(SK);
+    for (auto SuccSK : SKSuccs) {
+      Type *DataFieldType = getSubkernelReturnDataFieldType(SK, SuccSK);
+      TypeSize size = getTypeAllocSize(DataFieldType);
+      if (size > maxSize)
+        maxSize = size;
+    }
+  }
+  vector<Type *> types;
+	// The BB id we are coming from (for phi instruction handling)
+	types.push_back(LLVMSubkernelIdType);
+	// The next subkernel to call
+	types.push_back(LLVMSubkernelIdType);
+	// Memory for the data struct which will be cast to the appropriate struct
+	// type for the from/to subkernel pair
+	types.push_back(ArrayType::get(Type::getInt8Ty(), maxSize()));
+	return StructType::get(M.getContext(), ArrayRef<Types *>(types))
+}
+
+void CPUCudaPass::() {
+}
 
 
 	// Convert references of basic blocks to the cloned function
@@ -408,6 +442,12 @@ void CPUCudaPass::findSubkernelBBs(Function &F) {
 	std::set<BasicBlock *> visited;
 	_findSubkernelBBs(&F.getEntryBlock(), visited);
 }
+void CPUCudaPass::createSubkernels(Function &F) {
+	findSubkernelBBs(F);
+	createSubkernelFunctionClones();
+	findSubkernelUsedVals();
+	SubkernelReturnType = getSubkernelsReturnType();
+}
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
 								   AnalysisManager<Module> &AM) {
@@ -429,12 +469,9 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 			continue;
 		}
 
-		errs() << "processing function " << F.getName() << "\n";
+		LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
-		findSubkernelBBs(F);
-
-		splitBlocksAroundBarriers(F);
-		splitFunctionAtBarriers(F);
+		createSubkernels(F);
 
 	}
 	// TODO optimise the preserved sets
