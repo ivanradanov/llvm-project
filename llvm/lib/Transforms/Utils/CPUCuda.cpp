@@ -135,67 +135,92 @@ BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
 struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
 	SubkernelIdType SK;
-	BBVector &nfunc_bbs;
 	LLVMContext &C;
-
-	// Label type for which BB id we should continue from after we return or we
-	// have come from
-	Type *BBIdType;
 	CPUCudaPass *Pass;
+
+	Type *StructIndexType;
 
 	TransformTerminator(SubkernelIdType SK, CPUCudaPass *Pass):
 		SK(SK),
 		C(Pass->M->getContext()),
 		Pass(Pass) {
+
+		StructIndexType = Type::getInt32Ty(C);
 	}
 
-	BasicBlock *createNewRetBB(Function *F, int RetLabel) {
+	BasicBlock *createNewRetBB(Function *F, BasicBlock *BBFrom, SubkernelIdType ContSK) {
 		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
-		ReturnInst::Create(F->getContext(), getReturnValue(RetLabel), NewBB);
-		return NewBB;
-	}
-
-	BasicBlock *createNewRetBB(Function *F, Value *RetValue) {
-		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
-		ReturnInst::Create(F->getContext(), RetValue, NewBB);
-		return NewBB;
-	}
-
-	Value *getReturnValue(int ContLabel) {
-		Constant *return_val = llvm::ConstantInt::get(BBIdType,
-		                                              /* value */ ContLabel,
+		Constant *from_label = llvm::ConstantInt::get(Pass->LLVMBBIdType,
+		                                              /* value */ Pass->SubkernelBBIds[SK][BBFrom],
 		                                              /* isSigned */ true);
-		return static_cast<Value *>(return_val);
-	}
+		Constant *cont_label = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
+		                                              /* value */ ContSK,
+		                                              /* isSigned */ true);
+		// Allocate return type
+		auto SKReturnType = Pass->SubkernelReturnType;
+		AllocaInst *ReturnValPtr = new AllocaInst(
+			SKReturnType,
+      Pass->M->getDataLayout().getAllocaAddrSpace(),
+      "returnvalalloca",
+      NewBB);
 
-	BasicBlock *createNewRetBB(Function *F) {
-		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
-		AllocaInst(Pass->SubkernelReturnType, 
-	}
+    Constant *zero = llvm::ConstantInt::get(StructIndexType, 0);
+		Constant *one = llvm::ConstantInt::get(StructIndexType, 1);
+		Constant *two = llvm::ConstantInt::get(StructIndexType, 2);
 
-	Value *getReturnValue(int ContLabel, int FromLabel) {
-		Constant *cont_label = llvm::ConstantInt::get(BBIdType,
-													  /* value */ ContLabel,
-													  /* isSigned */ true);
-		Constant *from_label = llvm::ConstantInt::get(BBIdType,
-													  /* value */ FromLabel,
-													  /* isSigned */ true);
-		ArrayRef<Constant *> fields(std::vector<Constant *>({cont_label, from_label}));
-		Constant *ReturnVal = ConstantStruct::getAnon(C, fields);
-		return static_cast<Value *>(ReturnVal);
-	}
+		// Store from and to
+    auto FromFieldPtr = GetElementPtrInst::Create(SKReturnType,
+                                                  ReturnValPtr,
+                                                  ArrayRef<Value *>(vector<Value *>({zero, zero})),
+                                                  "", NewBB);
+    new StoreInst(from_label, FromFieldPtr, NewBB);
+    auto ToFieldPtr = GetElementPtrInst::Create(SKReturnType,
+                                                ReturnValPtr,
+                                                ArrayRef<Value *>(vector<Value *>({zero, one})),
+                                                "", NewBB);
+    new StoreInst(cont_label, ToFieldPtr, NewBB);
 
-	// get a unique positive ID of the BB (in the original kernel)
-	int getId(BasicBlock *BB) {
-		// TODO: implement
-		return 1;
+    // Get pointer to data
+    auto DataFieldPtr = GetElementPtrInst::Create(SKReturnType,
+                                                  ReturnValPtr,
+                                                  ArrayRef<Value *>(vector<Value *>({zero, two})),
+                                                  "", NewBB);
+		// Get matching struct type and bitcast the pointer to it
+		auto DataStructType = Pass->getSubkernelReturnDataFieldType(SK, ContSK);
+    BitCastInst *DataStructPtr = new BitCastInst(DataFieldPtr,
+                                                 DataStructType,
+                                                 "", NewBB);
+
+    // Populate data struct
+    Value *DataStructVal = static_cast<Value *>(UndefValue::get(DataStructType));
+    {
+      auto UsedVals = Pass->SubkernelUsedVals[SK][ContSK];
+      unsigned i = 0;
+      for (auto &Val : UsedVals) {
+	      DataStructVal = InsertValueInst::Create(DataStructVal, Val, ArrayRef<unsigned>(vector<unsigned>({i})), "", NewBB);
+      }
+    }
+
+    // Store the struct at the pointer
+    new StoreInst(DataStructVal, DataStructPtr, NewBB);
+
+		// Load the ptr to the return val
+    auto ReturnStruct = new LoadInst(SKReturnType, ReturnValPtr, "", NewBB);
+
+		// return it
+    ReturnInst::Create(C, ReturnStruct, NewBB);
+
+    return NewBB;
 	}
 
 	void visitReturnInst(ReturnInst &I) {
 		LLVM_DEBUG(dbgs() << "Transforming ReturnInst " << I << "\n");
-		// -1 stands for return
-		Value *RetVal = getReturnValue(-1, getId(I.getParent()));
-		ReturnInst::Create(I.getContext(), RetVal, I.getParent());
+		Value *ReturnStructVal = static_cast<Value *>(UndefValue::get(Pass->SubkernelReturnType));
+    Constant *ContLabel = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
+                                                 /* value */ -1,
+                                                 /* isSigned */ true);
+    ReturnStructVal = InsertValueInst::Create(ReturnStructVal, ContLabel, ArrayRef<unsigned>(1), "", I.getParent());
+		ReturnInst::Create(I.getContext(), ReturnStructVal, I.getParent());
 		I.eraseFromParent();
 	}
 
@@ -204,10 +229,15 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 		Function *F = I.getFunction();
 		for (unsigned i = 0; i < I.getNumSuccessors(); i++) {
 			BasicBlock *succ = I.getSuccessor(i);
-			if (!in_vector(nfunc_bbs, succ)) {
-				BasicBlock *RetBB = createNewRetBB(F, getReturnValue(getId(succ), getId(I.getParent())));
-				I.setSuccessor(i, RetBB);
-			}
+			// TODO is this actually correct? is it possible for it to be a BB which
+			// _is_ in the subkernel but this branch actually should take us to a new
+			// subkernel
+			if (!in_vector(Pass->SubkernelBBs[SK], succ)) {
+				BasicBlock *RetBB = createNewRetBB(
+					F, I.getParent(),
+          Pass->findSubkernelFromBB(Pass->SubkernelBBIds[SK][succ]));
+        I.setSuccessor(i, RetBB);
+      }
 		}
 	}
 
@@ -278,6 +308,15 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 
 }
 
+SubkernelIdType CPUCudaPass::findSubkernelFromBB(BBIdType BB) {
+	for (auto SK : SubkernelIds) {
+		if (SubkernelBBIds[SK][SubkernelBBs[SK][0]] == BB)
+			return SK;
+	}
+	assert(false && "There should always be a subkernel from a BB");
+	return -1;
+}
+
 void CPUCudaPass::createSubkernelFunctionClones() {
 	for (auto SK : SubkernelIds) {
 		LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << SK << "\n");
@@ -338,12 +377,13 @@ Type *CPUCudaPass::getSubkernelsReturnType() {
   }
   vector<Type *> types;
 	// The BB id we are coming from (for phi instruction handling)
-	types.push_back(LLVMSubkernelIdType);
+	types.push_back(LLVMBBIdType);
 	// The next subkernel to call
 	types.push_back(LLVMSubkernelIdType);
 	// Memory for the data struct which will be cast to the appropriate struct
 	// type for the from/to subkernel pair
 	types.push_back(ArrayType::get(Type::getInt8Ty(M->getContext()), maxSize));
+	// Resulting in { from: blockIdType, to: blockIdType, data: [int8] }
 	return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
@@ -364,20 +404,30 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
 	// be used as an input
 	auto usedVals = SubkernelUsedVals[SK][SK];
 
-	// Construct the data struct param
-	std::vector<Type *> valparams;
-	for (auto val : usedVals) {
-		valparams.push_back(val->getType());
+	// Use a struct
+	if (true) {
+    // Construct the data struct param
+    std::vector<Type *> valparams;
+    for (auto val : usedVals) {
+      valparams.push_back(val->getType());
+    }
+    StructType *ValArgs = StructType::get(M->getContext(), ArrayRef<Type *>(valparams));
+
+    TypeVector params;
+    // The id of the BB we retuned from in the previous subkernel (for phi instr)
+    params.push_back(LLVMBBIdType);
+    // Values to be preserved between subkernel calls
+    params.push_back(ValArgs);
+
+    return params;
+	} else {
+		std::vector<Type *> params;
+		params.push_back(LLVMBBIdType);
+		for (auto val : usedVals) {
+			params.push_back(val->getType());
+		}
+		return params;
 	}
-	StructType *ValArgs = StructType::get(M->getContext(), ArrayRef<Type *>(valparams));
-
-	TypeVector params;
-	// The id of the BB we retuned from in the previous subkernel (for phi instr)
-	params.push_back(LLVMBBIdType);
-	// Values to be preserved between subkernel calls
-	params.push_back(ValArgs);
-
-	return params;
 }
 
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
@@ -401,6 +451,9 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
 
 	nf->takeName(_nf);
+
+	// TODO construct the entry block which extracts the vals from the param
+	// struct and makes BBs for handling phi instructions
 
 	// Transfer usages of the usedVals to the arguments to the function
 	{

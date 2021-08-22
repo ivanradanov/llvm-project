@@ -59,6 +59,7 @@ namespace llvm {
 		bool blockIsAfterBarrier(BasicBlock *BB);
 		void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
 		void findSubkernelUsedVals();
+		SubkernelIdType findSubkernelFromBB(BBIdType BB);
 		void createSubkernelFunctionClones();
 		set<SubkernelIdType> getSubkernelSuccessors(SubkernelIdType SK);
 		Type *getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK);
