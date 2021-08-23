@@ -39,8 +39,12 @@ namespace llvm {
 		Module *M;
 		Function *F;
 
-		std::set<BasicBlock *> blocks_after_barriers;
+		std::set<BasicBlock *> BlocksAfterBarriers;
+		std::set<BasicBlock *> BlocksBeforeBarriers;
 		std::set<Function *> added_functions;
+
+		std::set<BasicBlock *> BlocksAfterBarriersId;
+		std::set<BasicBlock *> BlocksBeforeBarriersId;
 
 		set<SubkernelIdType> SubkernelIds;
 		map<SubkernelIdType, BBVector> SubkernelBBs;
@@ -51,8 +55,8 @@ namespace llvm {
 
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
-		Type *LLVMBBIdType;
-		Type *LLVMSubkernelIdType;
+		IntegerType *LLVMBBIdType;
+		IntegerType *LLVMSubkernelIdType;
 		Type *SubkernelReturnType;
 
 		void splitBlocksAroundBarriers(Function &F);

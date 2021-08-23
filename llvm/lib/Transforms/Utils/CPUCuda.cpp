@@ -49,7 +49,7 @@ void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
 				auto &instruction = *_begin;
 				if (instrIsBarrier(&instruction)) {
 					auto newbb = SplitBlock(&bb, &instruction);
-					blocks_after_barriers.insert(newbb);
+					BlocksAfterBarriers.insert(newbb);
 					return true;
 				}
 			}
@@ -58,8 +58,12 @@ void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
 	}());
 }
 
+bool CPUCudaPass::blockIsBeforeBarrier(BasicBlock *BB) {
+	return BlocksAfterBarriers.find(BB) != BlocksAfterBarriers.end();
+}
+
 bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
-	return blocks_after_barriers.find(BB) != blocks_after_barriers.end();
+	return BlocksAfterBarriers.find(BB) != BlocksAfterBarriers.end();
 }
 
 template <class T>
@@ -455,6 +459,11 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	// Construct the entry block which sets up the usedVals params and handles phi
 	// instructions
 	{
+		BBVector OriginalBBs;
+		for (auto &BB : *nf) {
+      OriginalBBs.push_back(&BB);
+    }
+
 		BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
 
 		// Transfer usages of the usedVals to the arguments to the function
@@ -467,36 +476,36 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 			UnpackedArg->takeName(*I);
 		}
 
-		// List of BBs which are actually used in 
-		BBVector ToHandle;
-		BasicBlock *OriginalEntryBB = SubkernelBBs[SK][0];
-		for (auto &BB : nf) {
+    // List of BBs which are actually used in phi instructions
+    BBVector ToHandle;
+    BasicBlock *OriginalEntryBB = SubkernelBBs[SK][0];
+		for (auto &BB : OriginalBBs) {
 			BasicBlock *PhiHandlerBB = BasicBlock::Create(nf->getContext(), "generated_phi_handler_block", nf);
-			BranchInst::Create(&OriginalEntryBB, PhiHandlerBB);
+			BranchInst::Create(OriginalEntryBB, PhiHandlerBB);
       // Find usages of BB in phi instructions to be transformed
-			for (User *U : BB.users()) {
+			for (User *U : BB->users()) {
 				if (PHINode *Phi = dyn_cast<PHINode>(U)) {
 
 					// We are only interested in Phi Instructions in the original entry
 					// block TODO maybe we have to remove references to deleted BBs from
 					// phi instructions not in the original entry block?
-					if (Phi->parent() != OriginalEntryBB)
+					if (Phi->getParent() != OriginalEntryBB)
 						continue;
 
-					int BBIndex = Phi->getBasicBlockIndex(&BB);
+					int BBIndex = Phi->getBasicBlockIndex(BB);
 					assert(BBIndex != -1);
-					if (in_vector(func_bbs, &BB)) {
+					if (in_vector(nfunc_bbs, BB)) {
 						// If the BB already exists in the Subkernel add an additional case
 						// for the new handler block
 						Phi->addIncoming(Phi->getIncomingValue(BBIndex), PhiHandlerBB);
 					} else {
 						// If the BB does not exist in the SK, just replace its usage with
 						// the new handler block
-						Phi->replaceIncomingBlockWith(&BB, PhiHandlerBB);
+						Phi->replaceIncomingBlockWith(BB, PhiHandlerBB);
 					}
 
-					if (!in_vector(ToHandle, &BB))
-						ToHandle.push_back(&BB);
+					if (!in_vector(ToHandle, BB))
+						ToHandle.push_back(BB);
         }
 			}
     }
@@ -505,6 +514,10 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 		// we came from
 		SwitchInst *Switch = SwitchInst::Create(nf->getArg(0), OriginalEntryBB, 0, EntryBB);
 		for (auto &BB : ToHandle) {
+			ConstantInt *CaseConst = llvm::ConstantInt::get(LLVMBBIdType,
+                                                      SubkernelBBIds[SK][BB],
+                                                      /* isSigned */ true);
+			Switch->addCase(CaseConst, OriginalEntryBB);
 		}
 	}
 
@@ -578,6 +591,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 	// for each module?
 
 	LLVMBBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
+	LLVMSubkernelIdType = llvm::IntegerType::getInt32Ty(M.getContext());
 
 	for (auto &F : M) {
 		this->F = &F;
