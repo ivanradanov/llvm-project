@@ -353,13 +353,15 @@ void CPUCudaPass::findSubkernelUsedVals() {
 set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
 	set<SubkernelIdType> Successors;
 	for (auto BB : SubkernelBBs[SK]) {
-    for (auto bb : successors(BB)) {
-	    bool added = false;
+    for (auto SuccBB : successors(BB)) {
+	    BBIdType SuccBBId = SubkernelBBIds[SK][SuccBB];
+	    if (!blockIsAfterBarrier(SK, SuccBB))
+		    continue;
 	    for (auto _SK : SubkernelIds) {
-		    if (in_vector(SubkernelBBs[_SK], bb)) {
+		    BBIdType _SKEntryBB = SubkernelBBIds[_SK][SubkernelBBs[_SK][0]];
+		    if (_SKEntryBB == SuccBBId) {
 			    Successors.insert(_SK);
-			    assert(!added && "There should be only one successor for a single BB");
-			    added = true;
+			    break;
 		    }
 	    }
     }
@@ -465,8 +467,8 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	added_functions.insert(nf);
 	// Insert the cloned basic blocks
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
-
 	nf->takeName(_nf);
+	SubkernelFs[SK] = nf;
 
 	// Construct the entry block which sets up the usedVals params and handles phi
 	// instructions
@@ -551,7 +553,6 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 		transformer.visit(term);
 	}
 
-	LLVM_DEBUG(M->dump());
 	// Erase unneeded basic blocks
 	{
 		BBVector to_remove;
@@ -571,14 +572,9 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 		}
 		EmptyBB->eraseFromParent();
 	}
-	LLVM_DEBUG(M->dump());
 
 	// Delete the dead function
 	_nf->eraseFromParent();
-	LLVM_DEBUG(M->dump());
-
-	// Add jump to starting block
-
 
 }
 
@@ -619,8 +615,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 		createSubkernels(F);
 
 	}
-	LLVM_DEBUG(errs() << "final module dump:" << "\n");
-	LLVM_DEBUG(M.dump());
+
 	// TODO optimise the preserved sets
 	return PreservedAnalyses::none();
 }
