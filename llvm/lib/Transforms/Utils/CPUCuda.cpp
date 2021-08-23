@@ -579,6 +579,7 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 }
 
 void CPUCudaPass::createSubkernels(Function &F) {
+	splitBlocksAroundBarriers(F);
 	findSubkernelBBs(F);
 	createSubkernelFunctionClones();
 	findSubkernelUsedVals();
