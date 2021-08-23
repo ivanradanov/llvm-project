@@ -58,12 +58,13 @@ void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
 	}());
 }
 
-bool CPUCudaPass::blockIsBeforeBarrier(BasicBlock *BB) {
+bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
 	return BlocksAfterBarriers.find(BB) != BlocksAfterBarriers.end();
 }
 
-bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
-	return BlocksAfterBarriers.find(BB) != BlocksAfterBarriers.end();
+bool CPUCudaPass::blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB) {
+	BasicBlock *OriginalFunBB = OriginalFunBBs[SubkernelBBIds[SK][BB]];
+	return BlocksAfterBarriers.find(OriginalFunBB) != BlocksAfterBarriers.end();
 }
 
 template <class T>
@@ -233,10 +234,11 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 		Function *F = I.getFunction();
 		for (unsigned i = 0; i < I.getNumSuccessors(); i++) {
 			BasicBlock *succ = I.getSuccessor(i);
-			// TODO is this actually correct? is it possible for it to be a BB which
-			// _is_ in the subkernel but this branch actually should take us to a new
-			// subkernel
-			if (!in_vector(Pass->SubkernelBBs[SK], succ)) {
+			if (Pass->blockIsAfterBarrier(SK, succ)) {
+				// If the succesor block is after a barrier, the branch instruction that
+				// jumps to it should be an unconditional one generated when we split
+				// the blocks around the barriers
+				assert(I.getNumSuccessors() == 1);
 				BasicBlock *RetBB = createNewRetBB(
 					F, I.getParent(),
           Pass->findSubkernelFromBB(Pass->SubkernelBBIds[SK][succ]));
@@ -274,6 +276,11 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 	}
 
 };
+
+void CPUCudaPass::findSubkernelBBs(Function &F) {
+	std::set<BasicBlock *> visited;
+	_findSubkernelBBs(&F.getEntryBlock(), visited);
+}
 
 void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 	if (visited.find(BB) != visited.end())
@@ -328,6 +335,7 @@ void CPUCudaPass::createSubkernelFunctionClones() {
 		// Clone the function to get a clone of the basic blocks
 		Function *NF = CloneFunction(F, VMap);
 		SubkernelFs[SK] = NF;
+		SubkernelBBs[SK] = convert_bb_vector(SubkernelBBs[SK], F, NF);
 	}
 }
 
@@ -335,7 +343,7 @@ void CPUCudaPass::findSubkernelUsedVals() {
 	for (auto SK : SubkernelIds) {
 		for (auto _SK : SubkernelIds) {
 			// Convert references of basic blocks to the cloned function
-			BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], F, SubkernelFs[SK]);
+			BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], SubkernelFs[_SK], SubkernelFs[SK]);
 			ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(SubkernelFs[SK], NFuncBBs);
 			SubkernelUsedVals[SK][_SK] = UsedVals;
 		}
@@ -394,12 +402,16 @@ Type *CPUCudaPass::getSubkernelsReturnType() {
 void CPUCudaPass::assignBBIds() {
 	for (auto SK : SubkernelIds) {
 		Function *F = SubkernelFs[SK];
-		std::vector<int> bb_ids;
 		int id = 0;
 		for (auto it = F->begin(); it != F->end(); ++it, ++id) {
 			BasicBlock *bb = &(*it);
 			SubkernelBBIds[SK][bb] = id;
 		}
+	}
+	int id = 0;
+	for (auto it = F->begin(); it != F->end(); ++it, ++id) {
+		BasicBlock *bb = &(*it);
+		OriginalFunBBs[id] = bb;
 	}
 }
 
@@ -436,7 +448,7 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
 
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	Function *_nf = SubkernelFs[SK];
-	// Convert references of basic blocks to the cloned function
+
 	std::vector<BasicBlock *> nfunc_bbs = SubkernelBBs[SK];
 
 	auto usedVals = SubkernelUsedVals[SK][SK];
@@ -547,16 +559,17 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 			if (!in_vector(nfunc_bbs, &bb))
 				to_remove.insert(to_remove.begin(), &bb);
 		}
+		// Empty placeholder BB to replace BB usages
+		BasicBlock *EmptyBB = BasicBlock::Create(M->getContext(), "empty_block", F);
 		for (auto &bb : to_remove) {
-			// Entry BB for jumping from for phi instruction
-			BasicBlock *EntryBB = BasicBlock::Create(M->getContext(), "entry_block", F);
 			for (auto &inst : *bb) {
 				if (!inst.use_empty())
 					inst.replaceAllUsesWith(UndefValue::get(inst.getType()));
 			}
-			bb->replaceAllUsesWith(EntryBB);
+			bb->replaceAllUsesWith(EmptyBB);
 			bb->eraseFromParent();
 		}
+		EmptyBB->eraseFromParent();
 	}
 	LLVM_DEBUG(M->dump());
 
@@ -569,10 +582,6 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 }
 
-void CPUCudaPass::findSubkernelBBs(Function &F) {
-	std::set<BasicBlock *> visited;
-	_findSubkernelBBs(&F.getEntryBlock(), visited);
-}
 void CPUCudaPass::createSubkernels(Function &F) {
 	findSubkernelBBs(F);
 	createSubkernelFunctionClones();
@@ -610,6 +619,8 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 		createSubkernels(F);
 
 	}
+	LLVM_DEBUG(errs() << "final module dump:" << "\n");
+	LLVM_DEBUG(M.dump());
 	// TODO optimise the preserved sets
 	return PreservedAnalyses::none();
 }
