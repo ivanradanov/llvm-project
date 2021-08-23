@@ -452,18 +452,60 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 	nf->takeName(_nf);
 
-	// TODO construct the entry block which extracts the vals from the param
-	// struct and makes BBs for handling phi instructions
-
-	// Transfer usages of the usedVals to the arguments to the function
+	// Construct the entry block which sets up the usedVals params and handles phi
+	// instructions
 	{
-		Function::arg_iterator I = nf->arg_begin(), E = nf->arg_end();
-		auto I2 = usedVals.begin(), E2 = usedVals.end();
-		for (; I != E; ++I, ++I2) {
-			(*I2)->replaceAllUsesWith(&*I);
-			I->takeName(*I2);
+		BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
+
+		// Transfer usages of the usedVals to the arguments to the function
+		auto I = usedVals.begin(), E = usedVals.end();
+		// Unpack args from data struct param and replace usages with them
+		for (unsigned i = 0; I != E; ++I, ++i) {
+			// The second argument of the function is the structure of usedVals
+			Value *UnpackedArg = ExtractValueInst::Create(nf->getArg(1), i, "", EntryBB);
+			(*I)->replaceAllUsesWith(UnpackedArg);
+			UnpackedArg->takeName(*I);
 		}
-		assert(I2 == E2);
+
+		// List of BBs which are actually used in 
+		BBVector ToHandle;
+		BasicBlock *OriginalEntryBB = SubkernelBBs[SK][0];
+		for (auto &BB : nf) {
+			BasicBlock *PhiHandlerBB = BasicBlock::Create(nf->getContext(), "generated_phi_handler_block", nf);
+			BranchInst::Create(&OriginalEntryBB, PhiHandlerBB);
+      // Find usages of BB in phi instructions to be transformed
+			for (User *U : BB.users()) {
+				if (PHINode *Phi = dyn_cast<PHINode>(U)) {
+
+					// We are only interested in Phi Instructions in the original entry
+					// block TODO maybe we have to remove references to deleted BBs from
+					// phi instructions not in the original entry block?
+					if (Phi->parent() != OriginalEntryBB)
+						continue;
+
+					int BBIndex = Phi->getBasicBlockIndex(&BB);
+					assert(BBIndex != -1);
+					if (in_vector(func_bbs, &BB)) {
+						// If the BB already exists in the Subkernel add an additional case
+						// for the new handler block
+						Phi->addIncoming(Phi->getIncomingValue(BBIndex), PhiHandlerBB);
+					} else {
+						// If the BB does not exist in the SK, just replace its usage with
+						// the new handler block
+						Phi->replaceIncomingBlockWith(&BB, PhiHandlerBB);
+					}
+
+					if (!in_vector(ToHandle, &BB))
+						ToHandle.push_back(&BB);
+        }
+			}
+    }
+
+		// The first argument of the function is the BBId label indicating which BB
+		// we came from
+		SwitchInst *Switch = SwitchInst::Create(nf->getArg(0), OriginalEntryBB, 0, EntryBB);
+		for (auto &BB : ToHandle) {
+		}
 	}
 
 	// Clone metadata from the old function
