@@ -110,28 +110,33 @@ ValueVector findValuesUsedInAndDefinedOutsideBBs(Function *f, BBVector bbs) {
 	return intersection;
 }
 
+BasicBlock *convertBasicBlock(BasicBlock *BB, Function *FOld, Function *FNew) {
+	unsigned id = 0;
+	for (auto it = FOld->begin(); it != FOld->end(); ++it, ++id) {
+		BasicBlock *bb = &(*it);
+		if (bb == BB)
+			break;
+	}
+	assert(id != FOld->size());
+	unsigned id2 = 0;
+	for (auto it = FNew->begin(); it != FNew->end(); ++it, ++id2) {
+		BasicBlock *bb = &(*it);
+		if (id == id2)
+			return bb;
+	}
+	assert(false && "A BB with the same index must exist in the new function as well");
+	return NULL;
+}
+
 // Converts a list of bbs to the corresponding list of bbs in the newly cloned
 // function
 //
 // TODO this depends on the representation of blocks in a function - is
 // there a better way to do it?
 BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
-	std::vector<int> bb_ids;
-	int id = 0;
-	for (auto it = fold->begin(); it != fold->end(); ++it, ++id) {
-		BasicBlock *bb = &(*it);
-		if (in_vector(vold, bb)) {
-			bb_ids.push_back(id);
-		}
-	}
 	BBVector vnew;
-	id = 0;
-	for (auto it = fnew->begin(); it != fnew->end(); ++it, ++id) {
-		BasicBlock *bb = &(*it);
-		if (in_vector(bb_ids, id)) {
-			vnew.push_back(bb);
-		}
-	}
+	for (auto BB : vold)
+		vnew.push_back(convertBasicBlock(BB, fold, fnew));
 	return vnew;
 }
 
@@ -155,46 +160,26 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
 	BasicBlock *createNewRetBB(Function *F, BasicBlock *BBFrom, SubkernelIdType ContSK) {
 		BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
-		Constant *from_label = llvm::ConstantInt::get(Pass->LLVMBBIdType,
+		Constant *FromLabel = llvm::ConstantInt::get(Pass->LLVMBBIdType,
 		                                              /* value */ Pass->SubkernelBBIds[SK][BBFrom],
 		                                              /* isSigned */ true);
-		Constant *cont_label = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
+		Constant *ContLabel = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
 		                                              /* value */ ContSK,
 		                                              /* isSigned */ true);
 		// Allocate return type
 		auto SKReturnType = Pass->SubkernelReturnType;
-		AllocaInst *ReturnValPtr = new AllocaInst(
-			SKReturnType,
-      Pass->M->getDataLayout().getAllocaAddrSpace(),
-      "returnvalalloca",
-      NewBB);
-
-    Constant *zero = llvm::ConstantInt::get(StructIndexType, 0);
-		Constant *one = llvm::ConstantInt::get(StructIndexType, 1);
-		Constant *two = llvm::ConstantInt::get(StructIndexType, 2);
+		Value *ReturnVal = static_cast<Value *>(UndefValue::get(SKReturnType));
 
 		// Store from and to
-    auto FromFieldPtr = GetElementPtrInst::Create(SKReturnType,
-                                                  ReturnValPtr,
-                                                  ArrayRef<Value *>(vector<Value *>({zero, zero})),
-                                                  "", NewBB);
-    new StoreInst(from_label, FromFieldPtr, NewBB);
-    auto ToFieldPtr = GetElementPtrInst::Create(SKReturnType,
-                                                ReturnValPtr,
-                                                ArrayRef<Value *>(vector<Value *>({zero, one})),
-                                                "", NewBB);
-    new StoreInst(cont_label, ToFieldPtr, NewBB);
+    ReturnVal = InsertValueInst::Create(ReturnVal, FromLabel,
+                                        ArrayRef<unsigned>({0}),
+                                        "", NewBB);
+    ReturnVal = InsertValueInst::Create(ReturnVal, ContLabel,
+                                        ArrayRef<unsigned>({1}),
+                                        "", NewBB);
 
-    // Get pointer to data
-    auto DataFieldPtr = GetElementPtrInst::Create(SKReturnType,
-                                                  ReturnValPtr,
-                                                  ArrayRef<Value *>(vector<Value *>({zero, two})),
-                                                  "", NewBB);
 		// Get matching struct type and bitcast the pointer to it
 		auto DataStructType = Pass->getSubkernelReturnDataFieldType(SK, ContSK);
-    BitCastInst *DataStructPtr = new BitCastInst(DataFieldPtr,
-                                                 DataStructType,
-                                                 "", NewBB);
 
     // Populate data struct
     Value *DataStructVal = static_cast<Value *>(UndefValue::get(DataStructType));
@@ -202,18 +187,32 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
       auto UsedVals = Pass->SubkernelUsedVals[SK][ContSK];
       unsigned i = 0;
       for (auto &Val : UsedVals) {
-	      DataStructVal = InsertValueInst::Create(DataStructVal, Val, ArrayRef<unsigned>(vector<unsigned>({i})), "", NewBB);
+	      DataStructVal = InsertValueInst::Create(DataStructVal, Val, ArrayRef<unsigned>({i}), "", NewBB);
+	      ++i;
       }
     }
 
-    // Store the struct at the pointer
-    new StoreInst(DataStructVal, DataStructPtr, NewBB);
+    // Reinterpret it as an array and insert it at the data field in the return
+    // value
 
-		// Load the ptr to the return val
-    auto ReturnStruct = new LoadInst(SKReturnType, ReturnValPtr, "", NewBB);
+    // TODO what are the appropriate address spaces for these instructions?
+    auto AddrSpace = Pass->M->getDataLayout().getAllocaAddrSpace();
+    AllocaInst *DataStructValPtr = new AllocaInst(
+	    DataStructType,
+	    AddrSpace,
+	    "", NewBB);
+    auto DataArrayType = SKReturnType->getTypeAtIndex(2);
+    BitCastInst *DataArrayPtr = new BitCastInst(
+	    DataStructValPtr,
+	    PointerType::get(DataArrayType, AddrSpace),
+	    "", NewBB);
+    LoadInst *DataStructAsArray = new LoadInst(DataArrayType, DataArrayPtr, "", NewBB);
+    ReturnVal = InsertValueInst::Create(ReturnVal, DataStructAsArray,
+                                        ArrayRef<unsigned>({2}),
+                                        "", NewBB);
 
-		// return it
-    ReturnInst::Create(C, ReturnStruct, NewBB);
+		// Return it
+    ReturnInst::Create(C, ReturnVal, NewBB);
 
     return NewBB;
 	}
@@ -224,7 +223,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
     Constant *ContLabel = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
                                                  /* value */ -1,
                                                  /* isSigned */ true);
-    ReturnStructVal = InsertValueInst::Create(ReturnStructVal, ContLabel, ArrayRef<unsigned>(1), "", I.getParent());
+    ReturnStructVal = InsertValueInst::Create(ReturnStructVal, ContLabel, ArrayRef<unsigned>({1}), "", I.getParent());
 		ReturnInst::Create(I.getContext(), ReturnStructVal, I.getParent());
 		I.eraseFromParent();
 	}
@@ -239,9 +238,9 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 				// jumps to it should be an unconditional one generated when we split
 				// the blocks around the barriers
 				assert(I.getNumSuccessors() == 1);
-				BasicBlock *RetBB = createNewRetBB(
-					F, I.getParent(),
-          Pass->findSubkernelFromBB(Pass->SubkernelBBIds[SK][succ]));
+				auto SuccSK = Pass->findSubkernelFromBB(Pass->SubkernelBBIds[SK][succ]);
+				assert(SuccSK != -1 && "There should always be a subkernel from a BB after a barrier");
+				BasicBlock *RetBB = createNewRetBB(F, I.getParent(), SuccSK);
         I.setSuccessor(i, RetBB);
       }
 		}
@@ -316,7 +315,7 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
 	SubkernelIdType SK = SubkernelIds.size();
 	SubkernelIds.insert(SK);
 	SubkernelBBs[SK] = func_bbs;
-
+	assert(BB == func_bbs[0] && (blockIsAfterBarrier(BB) || &F->getEntryBlock() == BB));
 }
 
 SubkernelIdType CPUCudaPass::findSubkernelFromBB(BBIdType BB) {
@@ -324,7 +323,6 @@ SubkernelIdType CPUCudaPass::findSubkernelFromBB(BBIdType BB) {
 		if (SubkernelBBIds[SK][SubkernelBBs[SK][0]] == BB)
 			return SK;
 	}
-	assert(false && "There should always be a subkernel from a BB");
 	return -1;
 }
 
@@ -378,7 +376,7 @@ Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, Subke
 	return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
-Type *CPUCudaPass::getSubkernelsReturnType() {
+StructType *CPUCudaPass::getSubkernelsReturnType() {
 	TypeSize maxSize = TypeSize::Fixed(0);
 	for (auto SK : SubkernelIds) {
     set<SubkernelIdType> SKSuccs = getSubkernelSuccessors(SK);
@@ -451,7 +449,7 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	Function *_nf = SubkernelFs[SK];
 
-	std::vector<BasicBlock *> nfunc_bbs = SubkernelBBs[SK];
+	BBVector nfunc_bbs = SubkernelBBs[SK];
 
 	auto usedVals = SubkernelUsedVals[SK][SK];
 
@@ -469,6 +467,14 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
 	nf->takeName(_nf);
 	SubkernelFs[SK] = nf;
+
+	// Get the BBs we have to remove before adding new ones which would interfere
+	// with this construction
+	BBVector to_remove;
+	for (auto &bb : *nf) {
+		if (!in_vector(nfunc_bbs, &bb))
+			to_remove.insert(to_remove.begin(), &bb);
+	}
 
 	// Construct the entry block which sets up the usedVals params and handles phi
 	// instructions
@@ -555,13 +561,8 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 	// Erase unneeded basic blocks
 	{
-		BBVector to_remove;
-		for (auto &bb : *nf) {
-			if (!in_vector(nfunc_bbs, &bb))
-				to_remove.insert(to_remove.begin(), &bb);
-		}
 		// Empty placeholder BB to replace BB usages
-		BasicBlock *EmptyBB = BasicBlock::Create(M->getContext(), "empty_block", F);
+		BasicBlock *EmptyBB = BasicBlock::Create(M->getContext(), "empty_block", nf);
 		for (auto &bb : to_remove) {
 			for (auto &inst : *bb) {
 				if (!inst.use_empty())
@@ -570,6 +571,7 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 			bb->replaceAllUsesWith(EmptyBB);
 			bb->eraseFromParent();
 		}
+
 		EmptyBB->eraseFromParent();
 	}
 

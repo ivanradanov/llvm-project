@@ -54,7 +54,7 @@ namespace llvm {
 		// have come from
 		IntegerType *LLVMBBIdType;
 		IntegerType *LLVMSubkernelIdType;
-		Type *SubkernelReturnType;
+		StructType *SubkernelReturnType;
 
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
@@ -65,7 +65,7 @@ namespace llvm {
 		void createSubkernelFunctionClones();
 		set<SubkernelIdType> getSubkernelSuccessors(SubkernelIdType SK);
 		Type *getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK);
-		Type *getSubkernelsReturnType();
+		StructType *getSubkernelsReturnType();
 		void assignBBIds();
 		TypeVector getSubkernelParams(SubkernelIdType SK);
 		void transformSubkernels(SubkernelIdType SK);
