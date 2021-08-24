@@ -470,20 +470,26 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 	// Get the BBs we have to remove before adding new ones which would interfere
 	// with this construction
-	BBVector to_remove;
+	BBVector BBsToRemove;
 	for (auto &bb : *nf) {
 		if (!in_vector(nfunc_bbs, &bb))
-			to_remove.insert(to_remove.begin(), &bb);
+			BBsToRemove.insert(BBsToRemove.begin(), &bb);
+	}
+	BBVector OriginalBBs;
+	for (auto &BB : *nf) {
+		OriginalBBs.push_back(&BB);
+	}
+
+	// Add return from exiting blocks
+	for (auto &bb : nfunc_bbs) {
+		Instruction *term = bb->getTerminator();
+		TransformTerminator transformer(SK, this);
+		transformer.visit(term);
 	}
 
 	// Construct the entry block which sets up the usedVals params and handles phi
 	// instructions
 	{
-		BBVector OriginalBBs;
-		for (auto &BB : *nf) {
-      OriginalBBs.push_back(&BB);
-    }
-
 		BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
 
 		// Transfer usages of the usedVals to the arguments to the function
@@ -551,19 +557,11 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 	// At this point, the unused basic blocks in nf might still use the
 	// arguments of _nf so we cannot delete it yet
 
-
-	// Add return from exiting blocks
-	for (auto &bb : nfunc_bbs) {
-		Instruction *term = bb->getTerminator();
-		TransformTerminator transformer(SK, this);
-		transformer.visit(term);
-	}
-
 	// Erase unneeded basic blocks
 	{
 		// Empty placeholder BB to replace BB usages
 		BasicBlock *EmptyBB = BasicBlock::Create(M->getContext(), "empty_block", nf);
-		for (auto &bb : to_remove) {
+		for (auto &bb : BBsToRemove) {
 			for (auto &inst : *bb) {
 				if (!inst.use_empty())
 					inst.replaceAllUsesWith(UndefValue::get(inst.getType()));
