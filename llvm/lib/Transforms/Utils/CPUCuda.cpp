@@ -159,7 +159,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
   }
 
   BasicBlock *createNewRetBB(BasicBlock *BBFrom, SubkernelIdType ContSK) {
-	  Function *F = Pass->SubkernelFs[SK];
+    Function *F = Pass->SubkernelFs[SK];
 
     BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
     Constant *FromLabel = llvm::ConstantInt::get(Pass->LLVMBBIdType,
@@ -173,22 +173,27 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
     Value *DataStructPtr = F->getArg(1);
 
     ConstantInt *Zero = ConstantInt::get(
-	    Pass->GepIndexType, 0);
+      Pass->GepIndexType, 0);
 
     for (auto &Val : Pass->CombinedUsedVals[SK]) {
-	    Instruction *Inst = dyn_cast<Instruction>(Val);
-	    assert(Inst && "Values in CombinedUsedVals must be instructions");
-	    BasicBlock *ValBB = Inst->getParent();
-	    // We are only interested in values which are defined in the current
-	    // subkernel
+      Instruction *Inst = dyn_cast<Instruction>(Val);
+      if (!Inst) {
+        // TODO in the case when the val is an argument to the function, we must
+        // insert it into the data param prior to the first call to a subkernel
+        assert(dyn_cast<Argument>(Val) && "Values in CombinedUsedVals must be instructions or arguments");
+        continue;
+      }
+      BasicBlock *ValBB = Inst->getParent();
+      // We are only interested in values which are defined in the current
+      // subkernel
       if (!in_vector(Pass->SubkernelBBs[SK], ValBB))
-	      continue;
+        continue;
 
       // TODO define the type somewhere else
       ConstantInt *Index = ConstantInt::get(
-	      Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
+        Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
-	      Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
+        Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
       // FIXME It is probably best to define UsedVals, etc. as Instructions and
       // not Values
       Instruction *NextInst = Inst->getNextNonDebugInstruction();
@@ -286,12 +291,12 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
     func_bbs.push_back(bb);
 
     for (auto succBB : successors(bb)) {
-	    if (blockIsAfterBarrier(succBB)) {
-		    // We crossed a barrier: start a new search at that successor
-		    _findSubkernelBBs(succBB, visited);
-	    } else {
-		    to_walk.push(succBB);
-	    }
+      if (blockIsAfterBarrier(succBB)) {
+        // We crossed a barrier: start a new search at that successor
+        _findSubkernelBBs(succBB, visited);
+      } else {
+        to_walk.push(succBB);
+      }
     }
   }
 
@@ -322,8 +327,8 @@ void CPUCudaPass::createSubkernelFunctionClones() {
 
 void CPUCudaPass::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
-	  ValueVector CombinedUsedVals;
-	  map<Value *, int> IndexInCombinedDataType;
+    ValueVector CombinedUsedVals;
+    map<Value *, int> IndexInCombinedDataType;
     for (auto _SK : SubkernelIds) {
       // Convert references of basic blocks to the cloned function
       BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], SubkernelFs[_SK], SubkernelFs[SK]);
@@ -331,23 +336,29 @@ void CPUCudaPass::findSubkernelUsedVals() {
       SubkernelUsedVals[SK][_SK] = UsedVals;
 
       for (auto Val : UsedVals) {
-	      if (!in_vector(CombinedUsedVals, Val)) {
-		      IndexInCombinedDataType[Val] = CombinedUsedVals.size();
-		      CombinedUsedVals.push_back(Val);
-	      }
+        if (!in_vector(CombinedUsedVals, Val)) {
+          IndexInCombinedDataType[Val] = CombinedUsedVals.size();
+          CombinedUsedVals.push_back(Val);
+        }
       }
     }
     this->CombinedUsedVals[SK] = CombinedUsedVals;
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
   }
 
-  SubkernelIdType SK = 0;
-  ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
-  vector<Type *> Types;
-  for (auto Val : CombinedUsedVals) {
-	  Types.push_back(Val->getType());
+  vector<StructType *> CombinedDataTypes;
+  for (auto SK : SubkernelIds) {
+    ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
+    vector<Type *> Types;
+    for (auto Val : CombinedUsedVals) {
+      Types.push_back(Val->getType());
+    }
+    CombinedDataTypes.push_back(StructType::get(M->getContext(), Types));
   }
-  CombinedDataType = StructType::get(M->getContext(), Types);
+  for (auto SK : SubkernelIds) {
+    assert(CombinedDataTypes[0] == CombinedDataTypes[SK]);
+  }
+  CombinedDataType = CombinedDataTypes[0];
 }
 
 set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
@@ -379,12 +390,12 @@ Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, Subke
 }
 
 Type *CPUCudaPass::getCombinedDataType() {
-	return CombinedDataType;
-	assert(false && "impl");
+  return CombinedDataType;
+  assert(false && "impl");
 }
 
 int CPUCudaPass::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
-	return IndexInCombinedDataType[SK][Val];
+  return IndexInCombinedDataType[SK][Val];
 }
 
 StructType *CPUCudaPass::getSubkernelsReturnType() {
@@ -479,12 +490,12 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
     // Unpack args from data struct param and replace usages with them
     for (unsigned i = 0; I != E; ++I, ++i) {
       // The second argument of the function is the structure of usedVals
-	    Value *Val = (*I);
-	    // TODO define the type somewhere else so that it can be easily changed
-	    ConstantInt *Index = ConstantInt::get(
-		    GepIndexType, getValIndexInCombinedDataType(SK, Val));
-	    GetElementPtrInst *Gep = GetElementPtrInst::Create(
-		    getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
+      Value *Val = (*I);
+      // TODO define the type somewhere else so that it can be easily changed
+      ConstantInt *Index = ConstantInt::get(
+        GepIndexType, getValIndexInCombinedDataType(SK, Val));
+      GetElementPtrInst *Gep = GetElementPtrInst::Create(
+        getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
       LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
       Val->replaceAllUsesWith(UnpackedVal);
       UnpackedVal->takeName(Val);
@@ -581,13 +592,14 @@ void CPUCudaPass::createSubkernels(Function &F) {
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
   this->M = &M;
-  // TODO is it needed to reset class members? does this class get newly created
-  // for each module?
 
   LLVMBBIdType = IntegerType::getInt32Ty(M.getContext());
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M.getContext());
   GepIndexType = IntegerType::getInt32Ty(M.getContext());
+
   for (auto &F : M) {
+    // TODO HAVE TO RESET CLASS MEMBERS BEFORE EACH ITERATION!!!
+
     this->F = &F;
     // TODO make a clang attribute for this
     if (!F.getName().contains("mat_mul")) {
