@@ -62,11 +62,6 @@ using namespace PatternMatch;
 
 #define DEBUG_TYPE "lower-amx-type"
 
-// In AMX intrinsics we let Shape = {Row, Col}, but the
-// RealCol = Col / ElementSize. We may use the RealCol
-// as a new Row for other new created AMX intrinsics.
-static std::map<Value *, Value *> Col2Row;
-
 static AllocaInst *createAllocaInstAtEntry(IRBuilder<> &Builder,
                                            BasicBlock *BB) {
   Function &F = *BB->getParent();
@@ -83,7 +78,28 @@ static AllocaInst *createAllocaInstAtEntry(IRBuilder<> &Builder,
   return AllocaRes;
 }
 
-static Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity) {
+namespace {
+class X86LowerAMXType {
+  Function &Func;
+  TargetMachine *TM = nullptr;
+
+  // In AMX intrinsics we let Shape = {Row, Col}, but the
+  // RealCol = Col / ElementSize. We may use the RealCol
+  // as a new Row for other new created AMX intrinsics.
+  std::map<Value *, Value *> Col2Row;
+
+public:
+  X86LowerAMXType(Function &F, TargetMachine *TargetM) : Func(F), TM(TargetM) {}
+  bool visit();
+  void combineLoadBitcast(LoadInst *LD, BitCastInst *Bitcast);
+  void combineBitcastStore(BitCastInst *Bitcast, StoreInst *ST);
+  bool transformBitcast(BitCastInst *Bitcast);
+  std::pair<Value *, Value *> getShape(IntrinsicInst *II, unsigned OpNo);
+  Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity);
+};
+
+Value *X86LowerAMXType::getRowFromCol(Instruction *II, Value *V,
+                                      unsigned Granularity) {
   if (Col2Row.count(V))
     return Col2Row[V];
   IRBuilder<> Builder(&*II->getParent()->getFirstInsertionPt());
@@ -98,26 +114,14 @@ static Value *getRowFromCol(Instruction *II, Value *V, unsigned Granularity) {
   return RealRow;
 }
 
-namespace {
-class X86LowerAMXType {
-  Function &Func;
-  TargetMachine *TM = nullptr;
-
-public:
-  X86LowerAMXType(Function &F, TargetMachine *TargetM) : Func(F), TM(TargetM) {}
-  bool visit();
-  void combineLoadBitcast(LoadInst *LD, BitCastInst *Bitcast);
-  void combineBitcastStore(BitCastInst *Bitcast, StoreInst *ST);
-  bool transformBitcast(BitCastInst *Bitcast);
-  std::pair<Value *, Value *> getShape(IntrinsicInst *II, unsigned OpNo);
-};
-
-std::pair<Value *, Value *> X86LowerAMXType::getShape(IntrinsicInst *II, unsigned OpNo) {
+std::pair<Value *, Value *> X86LowerAMXType::getShape(IntrinsicInst *II,
+                                                      unsigned OpNo) {
   Value *Row = nullptr, *Col = nullptr;
   switch (II->getIntrinsicID()) {
   default:
     llvm_unreachable("Expect amx intrinsics");
   case Intrinsic::x86_tileloadd64_internal:
+  case Intrinsic::x86_tileloaddt164_internal:
   case Intrinsic::x86_tilestored64_internal: {
     Row = II->getArgOperand(0);
     Col = II->getArgOperand(1);
@@ -454,7 +458,7 @@ class X86VolatileTileData {
 public:
   X86VolatileTileData(Function &Func) : F(Func) {}
   Value *updatePhiIncomings(BasicBlock *BB,
-                            SmallVector<Instruction *, 2> &Imcomings);
+                            SmallVector<Instruction *, 2> &Incomings);
   void replacePhiDefWithLoad(Instruction *PHI, Value *StorePtr);
   bool volatileTileData();
   void volatileTilePHI(PHINode *Inst);
@@ -462,10 +466,10 @@ public:
 };
 
 Value *X86VolatileTileData::updatePhiIncomings(
-    BasicBlock *BB, SmallVector<Instruction *, 2> &Imcomings) {
+    BasicBlock *BB, SmallVector<Instruction *, 2> &Incomings) {
   Value *I8Ptr = getAllocaPos(BB);
 
-  for (auto *I : Imcomings) {
+  for (auto *I : Incomings) {
     User *Store = createTileStore(I, I8Ptr);
 
     // All its uses (except phi) should load from stored mem.
@@ -543,16 +547,16 @@ void X86VolatileTileData::replacePhiDefWithLoad(Instruction *PHI,
 // ------------------------------------------------------
 void X86VolatileTileData::volatileTilePHI(PHINode *PHI) {
   BasicBlock *BB = PHI->getParent();
-  SmallVector<Instruction *, 2> Imcomings;
+  SmallVector<Instruction *, 2> Incomings;
 
   for (unsigned I = 0, E = PHI->getNumIncomingValues(); I != E; ++I) {
     Value *Op = PHI->getIncomingValue(I);
     Instruction *Inst = dyn_cast<Instruction>(Op);
     assert(Inst && "We shouldn't fold AMX instrution!");
-    Imcomings.push_back(Inst);
+    Incomings.push_back(Inst);
   }
 
-  Value *StorePtr = updatePhiIncomings(BB, Imcomings);
+  Value *StorePtr = updatePhiIncomings(BB, Incomings);
   replacePhiDefWithLoad(PHI, StorePtr);
 }
 

@@ -9,7 +9,6 @@
 // UNSUPPORTED: c++03, c++11, c++14, c++17
 // UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: gcc-10
-// XFAIL: msvc && clang
 
 // template<class S, class I>
 // concept sentinel_for;
@@ -21,12 +20,12 @@
 
 // clang-format off
 template<std::input_or_output_iterator, std::semiregular>
-[[nodiscard]] constexpr bool check_sentinel_subsumption() {
+constexpr bool check_sentinel_subsumption() {
   return false;
 }
 
 template<class I, std::sentinel_for<I> >
-[[nodiscard]] constexpr bool check_subsumption() {
+constexpr bool check_subsumption() {
   return true;
 }
 // clang-format on

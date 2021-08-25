@@ -15,6 +15,18 @@ int f0() {
   struct S t;
   s = t;
 
+  // Don't warn for an extern variable.
+  extern int w;
+  w = 0;
+
+  // Following gcc, this should not warn.
+  int a;
+  w = (a = 0);
+
+  // Following gcc, warn for a volatile variable.
+  volatile int b; // expected-warning{{variable 'b' set but not used}}
+  b = 0;
+
   int x;
   x = 0;
   return x;
@@ -29,4 +41,11 @@ void f1(void) {
     x = 0;
     return x;
   };
+}
+
+void f2 (void) {
+  // Don't warn, even if it's only used in a non-ODR context.
+  int x;
+  x = 0;
+  (void) sizeof(x);
 }

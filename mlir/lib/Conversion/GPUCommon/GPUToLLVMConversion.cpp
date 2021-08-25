@@ -17,7 +17,11 @@
 
 #include "../PassDetail.h"
 #include "mlir/Conversion/AsyncToLLVM/AsyncToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/ConversionTarget.h"
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVM.h"
+#include "mlir/Conversion/StandardToLLVM/ConvertStandardToLLVMPass.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
 #include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/GPU/GPUDialect.h"
@@ -311,7 +315,11 @@ void GpuToLLVMConversionPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   LLVMConversionTarget target(getContext());
 
+  target.addIllegalDialect<gpu::GPUDialect>();
+  target.addIllegalOp<UnrealizedConversionCastOp>();
+
   populateVectorToLLVMConversionPatterns(converter, patterns);
+  populateMemRefToLLVMConversionPatterns(converter, patterns);
   populateStdToLLVMConversionPatterns(converter, patterns);
   populateAsyncStructuralTypeConversionsAndLegality(converter, patterns,
                                                     target);
@@ -345,9 +353,7 @@ LLVM::CallOp FunctionCallBuilder::create(Location loc, OpBuilder &builder,
     return OpBuilder::atBlockEnd(module.getBody())
         .create<LLVM::LLVMFuncOp>(loc, functionName, functionType);
   }();
-  return builder.create<LLVM::CallOp>(
-      loc, const_cast<LLVM::LLVMFunctionType &>(functionType).getReturnType(),
-      builder.getSymbolRefAttr(function), arguments);
+  return builder.create<LLVM::CallOp>(loc, function, arguments);
 }
 
 // Returns whether all operands are of LLVM type.

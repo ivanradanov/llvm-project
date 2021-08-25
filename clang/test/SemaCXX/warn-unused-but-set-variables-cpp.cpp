@@ -4,6 +4,11 @@ struct S {
   int i;
 };
 
+struct __attribute__((warn_unused)) SWarnUnused {
+  int j;
+  void operator +=(int);
+};
+
 int f0() {
   int y; // expected-warning{{variable 'y' set but not used}}
   y = 0;
@@ -15,6 +20,11 @@ int f0() {
   struct S s;
   struct S t;
   s = t;
+
+  // Unless it's marked with the warn_unused attribute.
+  struct SWarnUnused swu; // expected-warning{{variable 'swu' set but not used}}
+  struct SWarnUnused swu2;
+  swu = swu2;
 
   int x;
   x = 0;
@@ -38,4 +48,17 @@ void f2() {
   const int y = 1;
   char a[x];
   char b[y];
+}
+
+void f3(int n) {
+  // Don't warn for overloaded compound assignment operators.
+  SWarnUnused swu;
+  swu += n;
+}
+
+template<typename T> void f4(T n) {
+  // Don't warn for (potentially) overloaded compound assignment operators in
+  // template code.
+  SWarnUnused swu;
+  swu += n;
 }

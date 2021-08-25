@@ -7,14 +7,17 @@ add_mlir_dialect_library(MLIRTensor
 
   DEPENDS
   MLIRTensorOpsIncGen
-  MLIRTensorAttrDefsIncGen
 
   LINK_COMPONENTS
   Core
 
   LINK_LIBS PUBLIC
   MLIRCastInterfaces
+  MLIRDialectUtils
   MLIRIR
+  MLIRInferTypeOpInterface
   MLIRSideEffectInterfaces
   MLIRSupport
+  MLIRStandard
+  MLIRViewLikeInterface
   )

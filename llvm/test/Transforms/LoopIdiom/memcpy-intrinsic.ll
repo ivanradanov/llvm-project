@@ -194,6 +194,131 @@ for.body:                                         ; preds = %for.body.lr.ph, %fo
   br i1 %cmp, label %for.body, label %for.cond.for.cond.cleanup_crit_edge
 }
 
+; unsigned copy_noalias_negative_stride(S* __restrict__ a, S* b, int n) {
+;   for (int i = n; i >= 0; i--) {
+;     a[i] = b[i];
+;   }
+;   return sizeof(a[0]);
+; }
+
+; Function Attrs: nofree nosync nounwind uwtable mustprogress
+define dso_local i32 @copy_noalias_negative_stride(%struct.S* noalias nocapture %0, %struct.S* nocapture readonly %1, i32 %2) local_unnamed_addr #0 {
+; CHECK-LABEL: @copy_noalias_negative_stride(
+; CHECK-NEXT:    [[TMP4:%.*]] = bitcast %struct.S* [[TMP0:%.*]] to i8*
+; CHECK-NEXT:    [[TMP5:%.*]] = bitcast %struct.S* [[TMP1:%.*]] to i8*
+; CHECK-NEXT:    [[TMP6:%.*]] = icmp sgt i32 [[TMP2:%.*]], -1
+; CHECK-NEXT:    br i1 [[TMP6]], label [[TMP7:%.*]], label [[TMP12:%.*]]
+; CHECK:       7:
+; CHECK-NEXT:    [[TMP8:%.*]] = zext i32 [[TMP2]] to i64
+; CHECK-NEXT:    [[TMP9:%.*]] = mul nuw nsw i64 [[TMP8]], 12
+; CHECK-NEXT:    [[TMP10:%.*]] = add nuw nsw i64 [[TMP9]], 12
+; CHECK-NEXT:    call void @llvm.memcpy.p0i8.p0i8.i64(i8* align 4 [[TMP4]], i8* align 4 [[TMP5]], i64 [[TMP10]], i1 false)
+; CHECK-NEXT:    br label [[TMP13:%.*]]
+; CHECK:       11:
+; CHECK-NEXT:    br label [[TMP12]]
+; CHECK:       12:
+; CHECK-NEXT:    ret i32 12
+; CHECK:       13:
+; CHECK-NEXT:    [[TMP14:%.*]] = phi i32 [ [[TMP20:%.*]], [[TMP13]] ], [ [[TMP2]], [[TMP7]] ]
+; CHECK-NEXT:    [[TMP15:%.*]] = zext i32 [[TMP14]] to i64
+; CHECK-NEXT:    [[TMP16:%.*]] = getelementptr inbounds [[STRUCT_S:%.*]], %struct.S* [[TMP1]], i64 [[TMP15]]
+; CHECK-NEXT:    [[TMP17:%.*]] = getelementptr inbounds [[STRUCT_S]], %struct.S* [[TMP0]], i64 [[TMP15]]
+; CHECK-NEXT:    [[TMP18:%.*]] = bitcast %struct.S* [[TMP17]] to i8*
+; CHECK-NEXT:    [[TMP19:%.*]] = bitcast %struct.S* [[TMP16]] to i8*
+; CHECK-NEXT:    [[TMP20]] = add nsw i32 [[TMP14]], -1
+; CHECK-NEXT:    [[TMP21:%.*]] = icmp sgt i32 [[TMP14]], 0
+; CHECK-NEXT:    br i1 [[TMP21]], label [[TMP13]], label [[TMP11:%.*]]
+;
+  %4 = icmp sgt i32 %2, -1
+  br i1 %4, label %5, label %7
+
+5:                                                ; preds = %3
+  br label %8
+
+6:                                                ; preds = %8
+  br label %7
+
+7:                                                ; preds = %6, %3
+  ret i32 12
+
+8:                                                ; preds = %5, %8
+  %9 = phi i32 [ %15, %8 ], [ %2, %5 ]
+  %10 = zext i32 %9 to i64
+  %11 = getelementptr inbounds %struct.S, %struct.S* %1, i64 %10
+  %12 = getelementptr inbounds %struct.S, %struct.S* %0, i64 %10
+  %13 = bitcast %struct.S* %12 to i8*
+  %14 = bitcast %struct.S* %11 to i8*
+  tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 4 dereferenceable(12) %13, i8* noundef nonnull align 4 dereferenceable(12) %14, i64 12, i1 false)
+  %15 = add nsw i32 %9, -1
+  %16 = icmp sgt i32 %9, 0
+  br i1 %16, label %8, label %6
+}
+
+; unsigned copy_noalias_opposite_stride(S* __restrict__ a, S* b, int n) {
+;   for (int i = 0, j = n; i < n && j >= 0; i++, j--) {
+;     a[i] = b[j];
+;   }
+;   return sizeof(a[0]);
+; }
+
+; Function Attrs: nofree nosync nounwind uwtable mustprogress
+define dso_local i32 @copy_noalias_opposite_stride(%struct.S* noalias nocapture %0, %struct.S* nocapture readonly %1, i32 %2) local_unnamed_addr #0 {
+; CHECK-LABEL: @copy_noalias_opposite_stride(
+; CHECK-NEXT:    [[TMP4:%.*]] = icmp sgt i32 [[TMP2:%.*]], 0
+; CHECK-NEXT:    br i1 [[TMP4]], label [[TMP5:%.*]], label [[TMP7:%.*]]
+; CHECK:       5:
+; CHECK-NEXT:    br label [[TMP8:%.*]]
+; CHECK:       6:
+; CHECK-NEXT:    br label [[TMP7]]
+; CHECK:       7:
+; CHECK-NEXT:    ret i32 12
+; CHECK:       8:
+; CHECK-NEXT:    [[TMP9:%.*]] = phi i32 [ [[TMP18:%.*]], [[TMP8]] ], [ [[TMP2]], [[TMP5]] ]
+; CHECK-NEXT:    [[TMP10:%.*]] = phi i32 [ [[TMP17:%.*]], [[TMP8]] ], [ 0, [[TMP5]] ]
+; CHECK-NEXT:    [[TMP11:%.*]] = zext i32 [[TMP9]] to i64
+; CHECK-NEXT:    [[TMP12:%.*]] = getelementptr inbounds [[STRUCT_S:%.*]], %struct.S* [[TMP1:%.*]], i64 [[TMP11]]
+; CHECK-NEXT:    [[TMP13:%.*]] = zext i32 [[TMP10]] to i64
+; CHECK-NEXT:    [[TMP14:%.*]] = getelementptr inbounds [[STRUCT_S]], %struct.S* [[TMP0:%.*]], i64 [[TMP13]]
+; CHECK-NEXT:    [[TMP15:%.*]] = bitcast %struct.S* [[TMP14]] to i8*
+; CHECK-NEXT:    [[TMP16:%.*]] = bitcast %struct.S* [[TMP12]] to i8*
+; CHECK-NEXT:    tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 4 dereferenceable(12) [[TMP15]], i8* noundef nonnull align 4 dereferenceable(12) [[TMP16]], i64 12, i1 false)
+; CHECK-NEXT:    [[TMP17]] = add nuw nsw i32 [[TMP10]], 1
+; CHECK-NEXT:    [[TMP18]] = add nsw i32 [[TMP9]], -1
+; CHECK-NEXT:    [[TMP19:%.*]] = icmp slt i32 [[TMP17]], [[TMP2]]
+; CHECK-NEXT:    [[TMP20:%.*]] = icmp sgt i32 [[TMP9]], 0
+; CHECK-NEXT:    [[TMP21:%.*]] = and i1 [[TMP19]], [[TMP20]]
+; CHECK-NEXT:    br i1 [[TMP21]], label [[TMP8]], label [[TMP6:%.*]]
+;
+  %4 = icmp sgt i32 %2, 0
+  br i1 %4, label %5, label %7
+
+5:                                                ; preds = %3
+  br label %8
+
+6:                                                ; preds = %8
+  br label %7
+
+7:                                                ; preds = %6, %3
+  ret i32 12
+
+8:                                                ; preds = %5, %8
+  %9 = phi i32 [ %18, %8 ], [ %2, %5 ]
+  %10 = phi i32 [ %17, %8 ], [ 0, %5 ]
+  %11 = zext i32 %9 to i64
+  %12 = getelementptr inbounds %struct.S, %struct.S* %1, i64 %11
+  %13 = zext i32 %10 to i64
+  %14 = getelementptr inbounds %struct.S, %struct.S* %0, i64 %13
+  %15 = bitcast %struct.S* %14 to i8*
+  %16 = bitcast %struct.S* %12 to i8*
+  tail call void @llvm.memcpy.p0i8.p0i8.i64(i8* noundef nonnull align 4 dereferenceable(12) %15, i8* noundef nonnull align 4 dereferenceable(12) %16, i64 12, i1 false)
+  %17 = add nuw nsw i32 %10, 1
+  %18 = add nsw i32 %9, -1
+  %19 = icmp slt i32 %17, %2
+  %20 = icmp sgt i32 %9, 0
+  %21 = and i1 %19, %20
+  br i1 %21, label %8, label %6
+}
+
 %struct.SPacked = type <{ i32, i32, i8 }>
 
 ; Function Attrs: nofree nounwind uwtable mustprogress

@@ -10,7 +10,7 @@
 /// AMX register need to be configured before use. Before FastRegAllocation pass
 /// the ldtilecfg instruction is inserted, however at that time we don't
 /// know the shape of each physical tile registers, because the register
-/// allocation is not done yet. This pass runs after egister allocation
+/// allocation is not done yet. This pass runs after register allocation
 /// pass. It collects the shape information of each physical tile register
 /// and store the shape in the stack slot that is allocated for load config
 /// to tile config register.
@@ -122,14 +122,15 @@ static inline void adjustColCfg(unsigned TIdx, MachineInstr *MI) {
 }
 
 bool X86FastTileConfig::isTileLoad(MachineInstr &MI) {
-  return MI.getOpcode() == X86::PTILELOADDV;
+  return MI.getOpcode() == X86::PTILELOADDV ||
+         MI.getOpcode() == X86::PTILELOADDT1V;
 }
 bool X86FastTileConfig::isTileStore(MachineInstr &MI) {
   return MI.getOpcode() == X86::PTILESTOREDV;
 }
 bool X86FastTileConfig::isAMXInstr(MachineInstr &MI) {
   // TODO: May need to handle some special nontile amx instrucion.
-  if (MI.getOpcode() == X86::LDTILECFG || MI.isDebugInstr())
+  if (MI.getOpcode() == X86::PLDTILECFGV || MI.isDebugInstr())
     return false;
 
   for (MachineOperand &MO : MI.operands())
@@ -281,7 +282,7 @@ bool X86FastTileConfig::fastTileConfig() {
   for (MachineBasicBlock &MBB : *MF) {
     SmallVector<MachineInstr *, 2> CFGs;
     for (MachineInstr &MI : MBB)
-      if (MI.getOpcode() == X86::LDTILECFG)
+      if (MI.getOpcode() == X86::PLDTILECFGV)
         CFGs.push_back(&MI);
     for (auto *MI : CFGs)
       materializeTileCfg(MI);

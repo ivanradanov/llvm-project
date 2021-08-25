@@ -356,8 +356,10 @@ public:
     return getTLI()->isTypeLegal(VT);
   }
 
-  unsigned getRegUsageForType(Type *Ty) {
-    return getTLI()->getTypeLegalizationCost(DL, Ty).first;
+  InstructionCost getRegUsageForType(Type *Ty) {
+    InstructionCost Val = getTLI()->getTypeLegalizationCost(DL, Ty).first;
+    assert(Val >= 0 && "Negative cost!");
+    return Val;
   }
 
   InstructionCost getGEPCost(Type *PointeeType, const Value *Ptr,
@@ -445,6 +447,11 @@ public:
 
     Triple TargetTriple = TM.getTargetTriple();
     if (!TargetTriple.isArch64Bit())
+      return false;
+
+    // TODO: Triggers issues on aarch64 on darwin, so temporarily disable it
+    // there.
+    if (TargetTriple.getArch() == Triple::aarch64 && TargetTriple.isOSDarwin())
       return false;
 
     return true;
@@ -750,7 +757,7 @@ public:
                                            Opd1PropInfo, Opd2PropInfo,
                                            Args, CxtI);
 
-    std::pair<unsigned, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
+    std::pair<InstructionCost, MVT> LT = TLI->getTypeLegalizationCost(DL, Ty);
 
     bool IsFloat = Ty->isFPOrFPVectorTy();
     // Assume that floating point arithmetic operations cost twice as much as
@@ -769,32 +776,91 @@ public:
       return LT.first * 2 * OpCost;
     }
 
+    // An 'Expand' of URem and SRem is special because it may default
+    // to expanding the operation into a sequence of sub-operations
+    // i.e. X % Y -> X-(X/Y)*Y.
+    if (ISD == ISD::UREM || ISD == ISD::SREM) {
+      bool IsSigned = ISD == ISD::SREM;
+      if (TLI->isOperationLegalOrCustom(IsSigned ? ISD::SDIVREM : ISD::UDIVREM,
+                                        LT.second) ||
+          TLI->isOperationLegalOrCustom(IsSigned ? ISD::SDIV : ISD::UDIV,
+                                        LT.second)) {
+        unsigned DivOpc = IsSigned ? Instruction::SDiv : Instruction::UDiv;
+        InstructionCost DivCost = thisT()->getArithmeticInstrCost(
+            DivOpc, Ty, CostKind, Opd1Info, Opd2Info, Opd1PropInfo,
+            Opd2PropInfo);
+        InstructionCost MulCost =
+            thisT()->getArithmeticInstrCost(Instruction::Mul, Ty, CostKind);
+        InstructionCost SubCost =
+            thisT()->getArithmeticInstrCost(Instruction::Sub, Ty, CostKind);
+        return DivCost + MulCost + SubCost;
+      }
+    }
+
+    // We cannot scalarize scalable vectors, so return Invalid.
+    if (isa<ScalableVectorType>(Ty))
+      return InstructionCost::getInvalid();
+
     // Else, assume that we need to scalarize this op.
     // TODO: If one of the types get legalized by splitting, handle this
     // similarly to what getCastInstrCost() does.
-    if (auto *VTy = dyn_cast<VectorType>(Ty)) {
-      unsigned Num = cast<FixedVectorType>(VTy)->getNumElements();
+    if (auto *VTy = dyn_cast<FixedVectorType>(Ty)) {
       InstructionCost Cost = thisT()->getArithmeticInstrCost(
           Opcode, VTy->getScalarType(), CostKind, Opd1Info, Opd2Info,
           Opd1PropInfo, Opd2PropInfo, Args, CxtI);
       // Return the cost of multiple scalar invocation plus the cost of
       // inserting and extracting the values.
       SmallVector<Type *> Tys(Args.size(), Ty);
-      return getScalarizationOverhead(VTy, Args, Tys) + Num * Cost;
+      return getScalarizationOverhead(VTy, Args, Tys) +
+             VTy->getNumElements() * Cost;
     }
 
     // We don't know anything about this scalar instruction.
     return OpCost;
   }
 
+  TTI::ShuffleKind improveShuffleKindFromMask(TTI::ShuffleKind Kind,
+                                              ArrayRef<int> Mask) const {
+    int Limit = Mask.size() * 2;
+    if (Mask.empty() ||
+        // Extra check required by isSingleSourceMaskImpl function (called by
+        // ShuffleVectorInst::isSingleSourceMask).
+        any_of(Mask, [Limit](int I) { return I >= Limit; }))
+      return Kind;
+    switch (Kind) {
+    case TTI::SK_PermuteSingleSrc:
+      if (ShuffleVectorInst::isReverseMask(Mask))
+        return TTI::SK_Reverse;
+      if (ShuffleVectorInst::isZeroEltSplatMask(Mask))
+        return TTI::SK_Broadcast;
+      break;
+    case TTI::SK_PermuteTwoSrc:
+      if (ShuffleVectorInst::isSelectMask(Mask))
+        return TTI::SK_Select;
+      if (ShuffleVectorInst::isTransposeMask(Mask))
+        return TTI::SK_Transpose;
+      break;
+    case TTI::SK_Select:
+    case TTI::SK_Reverse:
+    case TTI::SK_Broadcast:
+    case TTI::SK_Transpose:
+    case TTI::SK_InsertSubvector:
+    case TTI::SK_ExtractSubvector:
+    case TTI::SK_Splice:
+      break;
+    }
+    return Kind;
+  }
+
   InstructionCost getShuffleCost(TTI::ShuffleKind Kind, VectorType *Tp,
                                  ArrayRef<int> Mask, int Index,
                                  VectorType *SubTp) {
 
-    switch (Kind) {
+    switch (improveShuffleKindFromMask(Kind, Mask)) {
     case TTI::SK_Broadcast:
       return getBroadcastShuffleOverhead(cast<FixedVectorType>(Tp));
     case TTI::SK_Select:
+    case TTI::SK_Splice:
     case TTI::SK_Reverse:
     case TTI::SK_Transpose:
     case TTI::SK_PermuteSingleSrc:
@@ -820,8 +886,10 @@ public:
     const TargetLoweringBase *TLI = getTLI();
     int ISD = TLI->InstructionOpcodeToISD(Opcode);
     assert(ISD && "Invalid opcode");
-    std::pair<unsigned, MVT> SrcLT = TLI->getTypeLegalizationCost(DL, Src);
-    std::pair<unsigned, MVT> DstLT = TLI->getTypeLegalizationCost(DL, Dst);
+    std::pair<InstructionCost, MVT> SrcLT =
+        TLI->getTypeLegalizationCost(DL, Src);
+    std::pair<InstructionCost, MVT> DstLT =
+        TLI->getTypeLegalizationCost(DL, Dst);
 
     TypeSize SrcSize = SrcLT.second.getSizeInBits();
     TypeSize DstSize = DstLT.second.getSizeInBits();
@@ -936,6 +1004,10 @@ public:
                                           CostKind, I));
       }
 
+      // Scalarization cost is Invalid, can't assume any num elements.
+      if (isa<ScalableVectorType>(DstVTy))
+        return InstructionCost::getInvalid();
+
       // In other cases where the source or destination are illegal, assume
       // the operation will get scalarized.
       unsigned Num = cast<FixedVectorType>(DstVTy)->getNumElements();
@@ -993,7 +1065,8 @@ public:
       if (CondTy->isVectorTy())
         ISD = ISD::VSELECT;
     }
-    std::pair<unsigned, MVT> LT = TLI->getTypeLegalizationCost(DL, ValTy);
+    std::pair<InstructionCost, MVT> LT =
+        TLI->getTypeLegalizationCost(DL, ValTy);
 
     if (!(ValTy->isVectorTy() && !LT.second.isVector()) &&
         !TLI->isOperationExpand(ISD, LT.second)) {
@@ -1023,7 +1096,7 @@ public:
 
   InstructionCost getVectorInstrCost(unsigned Opcode, Type *Val,
                                      unsigned Index) {
-    std::pair<unsigned, MVT> LT =
+    std::pair<InstructionCost, MVT> LT =
         getTLI()->getTypeLegalizationCost(DL, Val->getScalarType());
 
     return LT.first;
@@ -1037,7 +1110,8 @@ public:
     // Assume types, such as structs, are expensive.
     if (getTLI()->getValueType(DL, Src,  true) == MVT::Other)
       return 4;
-    std::pair<unsigned, MVT> LT = getTLI()->getTypeLegalizationCost(DL, Src);
+    std::pair<InstructionCost, MVT> LT =
+        getTLI()->getTypeLegalizationCost(DL, Src);
 
     // Assuming that all loads of legal types cost 1.
     InstructionCost Cost = LT.first;
@@ -1115,9 +1189,6 @@ public:
     unsigned VecTySize = thisT()->getDataLayout().getTypeStoreSize(VecTy);
     unsigned VecTyLTSize = VecTyLT.getStoreSize();
 
-    // Return the ceiling of dividing A by B.
-    auto ceil = [](unsigned A, unsigned B) { return (A + B - 1) / B; };
-
     // Scale the cost of the memory operation by the fraction of legalized
     // instructions that will actually be used. We shouldn't account for the
     // cost of dead instructions since they will be removed.
@@ -1135,11 +1206,11 @@ public:
     if (Opcode == Instruction::Load && VecTySize > VecTyLTSize) {
       // The number of loads of a legal type it will take to represent a load
       // of the unlegalized vector type.
-      unsigned NumLegalInsts = ceil(VecTySize, VecTyLTSize);
+      unsigned NumLegalInsts = divideCeil(VecTySize, VecTyLTSize);
 
       // The number of elements of the unlegalized type that correspond to a
       // single legal instruction.
-      unsigned NumEltsPerLegalInst = ceil(NumElts, NumLegalInsts);
+      unsigned NumEltsPerLegalInst = divideCeil(NumElts, NumLegalInsts);
 
       // Determine which legal instructions will be used.
       BitVector UsedInsts(NumLegalInsts, false);
@@ -1326,6 +1397,12 @@ public:
       return thisT()->getShuffleCost(TTI::SK_Reverse,
                                      cast<VectorType>(Args[0]->getType()), None,
                                      0, cast<VectorType>(RetTy));
+    }
+    case Intrinsic::experimental_vector_splice: {
+      unsigned Index = cast<ConstantInt>(Args[2])->getZExtValue();
+      return thisT()->getShuffleCost(TTI::SK_Splice,
+                                     cast<VectorType>(Args[0]->getType()), None,
+                                     Index, cast<VectorType>(RetTy));
     }
     case Intrinsic::vector_reduce_add:
     case Intrinsic::vector_reduce_mul:
@@ -1565,6 +1642,7 @@ public:
     case Intrinsic::lifetime_end:
     case Intrinsic::sideeffect:
     case Intrinsic::pseudoprobe:
+    case Intrinsic::arithmetic_fence:
       return 0;
     case Intrinsic::masked_store: {
       Type *Ty = Tys[0];
@@ -1580,47 +1658,36 @@ public:
     }
     case Intrinsic::vector_reduce_add:
       return thisT()->getArithmeticReductionCost(Instruction::Add, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 None, CostKind);
     case Intrinsic::vector_reduce_mul:
       return thisT()->getArithmeticReductionCost(Instruction::Mul, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 None, CostKind);
     case Intrinsic::vector_reduce_and:
       return thisT()->getArithmeticReductionCost(Instruction::And, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 None, CostKind);
     case Intrinsic::vector_reduce_or:
-      return thisT()->getArithmeticReductionCost(Instruction::Or, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
+      return thisT()->getArithmeticReductionCost(Instruction::Or, VecOpTy, None,
                                                  CostKind);
     case Intrinsic::vector_reduce_xor:
       return thisT()->getArithmeticReductionCost(Instruction::Xor, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 None, CostKind);
     case Intrinsic::vector_reduce_fadd:
-      // FIXME: Add new flag for cost of strict reductions.
       return thisT()->getArithmeticReductionCost(Instruction::FAdd, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 FMF, CostKind);
     case Intrinsic::vector_reduce_fmul:
-      // FIXME: Add new flag for cost of strict reductions.
       return thisT()->getArithmeticReductionCost(Instruction::FMul, VecOpTy,
-                                                 /*IsPairwiseForm=*/false,
-                                                 CostKind);
+                                                 FMF, CostKind);
     case Intrinsic::vector_reduce_smax:
     case Intrinsic::vector_reduce_smin:
     case Intrinsic::vector_reduce_fmax:
     case Intrinsic::vector_reduce_fmin:
       return thisT()->getMinMaxReductionCost(
           VecOpTy, cast<VectorType>(CmpInst::makeCmpResultType(VecOpTy)),
-          /*IsPairwiseForm=*/false,
           /*IsUnsigned=*/false, CostKind);
     case Intrinsic::vector_reduce_umax:
     case Intrinsic::vector_reduce_umin:
       return thisT()->getMinMaxReductionCost(
           VecOpTy, cast<VectorType>(CmpInst::makeCmpResultType(VecOpTy)),
-          /*IsPairwiseForm=*/false,
           /*IsUnsigned=*/true, CostKind);
     case Intrinsic::abs:
     case Intrinsic::smax:
@@ -1804,10 +1871,11 @@ public:
     }
 
     const TargetLoweringBase *TLI = getTLI();
-    std::pair<unsigned, MVT> LT = TLI->getTypeLegalizationCost(DL, RetTy);
+    std::pair<InstructionCost, MVT> LT =
+        TLI->getTypeLegalizationCost(DL, RetTy);
 
-    SmallVector<unsigned, 2> LegalCost;
-    SmallVector<unsigned, 2> CustomCost;
+    SmallVector<InstructionCost, 2> LegalCost;
+    SmallVector<InstructionCost, 2> CustomCost;
     for (unsigned ISD : ISDs) {
       if (TLI->isOperationLegalOrPromote(ISD, LT.second)) {
         if (IID == Intrinsic::fabs && LT.second.isFloatingPoint() &&
@@ -1913,8 +1981,9 @@ public:
   }
 
   unsigned getNumberOfParts(Type *Tp) {
-    std::pair<unsigned, MVT> LT = getTLI()->getTypeLegalizationCost(DL, Tp);
-    return LT.first;
+    std::pair<InstructionCost, MVT> LT =
+        getTLI()->getTypeLegalizationCost(DL, Tp);
+    return *LT.first.getValue();
   }
 
   InstructionCost getAddressComputationCost(Type *Ty, ScalarEvolution *,
@@ -1922,9 +1991,9 @@ public:
     return 0;
   }
 
-  /// Try to calculate arithmetic and shuffle op costs for reduction operations.
+  /// Try to calculate arithmetic and shuffle op costs for reduction intrinsics.
   /// We're assuming that reduction operation are performing the following way:
-  /// 1. Non-pairwise reduction
+  ///
   /// %val1 = shufflevector<n x t> %val, <n x t> %undef,
   /// <n x i32> <i32 n/2, i32 n/2 + 1, ..., i32 n, i32 undef, ..., i32 undef>
   ///            \----------------v-------------/  \----------v------------/
@@ -1940,26 +2009,11 @@ public:
   ///                            n/4 elements               3*n/4 elements
   /// %red2 = op <n x t> %red1, <n x t> val2  - working with the vector of
   /// length n/2, the resulting vector has length n/4 etc.
-  /// 2. Pairwise reduction:
-  /// Everything is the same except for an additional shuffle operation which
-  /// is used to produce operands for pairwise kind of reductions.
-  /// %val1 = shufflevector<n x t> %val, <n x t> %undef,
-  /// <n x i32> <i32 0, i32 2, ..., i32 n-2, i32 undef, ..., i32 undef>
-  ///            \-------------v----------/  \----------v------------/
-  ///                   n/2 elements               n/2 elements
-  /// %val2 = shufflevector<n x t> %val, <n x t> %undef,
-  /// <n x i32> <i32 1, i32 3, ..., i32 n-1, i32 undef, ..., i32 undef>
-  ///            \-------------v----------/  \----------v------------/
-  ///                   n/2 elements               n/2 elements
-  /// %red1 = op <n x t> %val1, <n x t> val2
-  /// Again, the operation is performed on <n x t> vector, but the resulting
-  /// vector %red1 is <n/2 x t> vector.
   ///
   /// The cost model should take into account that the actual length of the
   /// vector is reduced on each iteration.
-  InstructionCost getArithmeticReductionCost(unsigned Opcode, VectorType *Ty,
-                                             bool IsPairwise,
-                                             TTI::TargetCostKind CostKind) {
+  InstructionCost getTreeReductionCost(unsigned Opcode, VectorType *Ty,
+                                       TTI::TargetCostKind CostKind) {
     Type *ScalarTy = Ty->getElementType();
     unsigned NumVecElts = cast<FixedVectorType>(Ty)->getNumElements();
     if ((Opcode == Instruction::Or || Opcode == Instruction::And) &&
@@ -1981,7 +2035,7 @@ public:
     unsigned NumReduxLevels = Log2_32(NumVecElts);
     InstructionCost ArithCost = 0;
     InstructionCost ShuffleCost = 0;
-    std::pair<unsigned, MVT> LT =
+    std::pair<InstructionCost, MVT> LT =
         thisT()->getTLI()->getTypeLegalizationCost(DL, Ty);
     unsigned LongVectorCount = 0;
     unsigned MVTLen =
@@ -1989,9 +2043,7 @@ public:
     while (NumVecElts > MVTLen) {
       NumVecElts /= 2;
       VectorType *SubTy = FixedVectorType::get(ScalarTy, NumVecElts);
-      // Assume the pairwise shuffles add a cost.
-      ShuffleCost += (IsPairwise + 1) *
-                     thisT()->getShuffleCost(TTI::SK_ExtractSubvector, Ty, None,
+      ShuffleCost += thisT()->getShuffleCost(TTI::SK_ExtractSubvector, Ty, None,
                                              NumVecElts, SubTy);
       ArithCost += thisT()->getArithmeticInstrCost(Opcode, SubTy, CostKind);
       Ty = SubTy;
@@ -2005,23 +2057,59 @@ public:
     // reduction operations are performed on the vectors with the same
     // architecture-dependent length.
 
-    // Non pairwise reductions need one shuffle per reduction level. Pairwise
-    // reductions need two shuffles on every level, but the last one. On that
-    // level one of the shuffles is <0, u, u, ...> which is identity.
-    unsigned NumShuffles = NumReduxLevels;
-    if (IsPairwise && NumReduxLevels >= 1)
-      NumShuffles += NumReduxLevels - 1;
-    ShuffleCost += NumShuffles * thisT()->getShuffleCost(
+    // By default reductions need one shuffle per reduction level.
+    ShuffleCost += NumReduxLevels * thisT()->getShuffleCost(
                                      TTI::SK_PermuteSingleSrc, Ty, None, 0, Ty);
     ArithCost += NumReduxLevels * thisT()->getArithmeticInstrCost(Opcode, Ty);
     return ShuffleCost + ArithCost +
            thisT()->getVectorInstrCost(Instruction::ExtractElement, Ty, 0);
   }
 
+  /// Try to calculate the cost of performing strict (in-order) reductions,
+  /// which involves doing a sequence of floating point additions in lane
+  /// order, starting with an initial value. For example, consider a scalar
+  /// initial value 'InitVal' of type float and a vector of type <4 x float>:
+  ///
+  ///   Vector = <float %v0, float %v1, float %v2, float %v3>
+  ///
+  ///   %add1 = %InitVal + %v0
+  ///   %add2 = %add1 + %v1
+  ///   %add3 = %add2 + %v2
+  ///   %add4 = %add3 + %v3
+  ///
+  /// As a simple estimate we can say the cost of such a reduction is 4 times
+  /// the cost of a scalar FP addition. We can only estimate the costs for
+  /// fixed-width vectors here because for scalable vectors we do not know the
+  /// runtime number of operations.
+  InstructionCost getOrderedReductionCost(unsigned Opcode, VectorType *Ty,
+                                          TTI::TargetCostKind CostKind) {
+    // Targets must implement a default value for the scalable case, since
+    // we don't know how many lanes the vector has.
+    if (isa<ScalableVectorType>(Ty))
+      return InstructionCost::getInvalid();
+
+    auto *VTy = cast<FixedVectorType>(Ty);
+    InstructionCost ExtractCost =
+        getScalarizationOverhead(VTy, /*Insert=*/false, /*Extract=*/true);
+    InstructionCost ArithCost = thisT()->getArithmeticInstrCost(
+        Opcode, VTy->getElementType(), CostKind);
+    ArithCost *= VTy->getNumElements();
+
+    return ExtractCost + ArithCost;
+  }
+
+  InstructionCost getArithmeticReductionCost(unsigned Opcode, VectorType *Ty,
+                                             Optional<FastMathFlags> FMF,
+                                             TTI::TargetCostKind CostKind) {
+    if (TTI::requiresOrderedReduction(FMF))
+      return getOrderedReductionCost(Opcode, Ty, CostKind);
+    return getTreeReductionCost(Opcode, Ty, CostKind);
+  }
+
   /// Try to calculate op costs for min/max reduction operations.
   /// \param CondTy Conditional type for the Select instruction.
   InstructionCost getMinMaxReductionCost(VectorType *Ty, VectorType *CondTy,
-                                         bool IsPairwise, bool IsUnsigned,
+                                         bool IsUnsigned,
                                          TTI::TargetCostKind CostKind) {
     Type *ScalarTy = Ty->getElementType();
     Type *ScalarCondTy = CondTy->getElementType();
@@ -2037,7 +2125,7 @@ public:
     }
     InstructionCost MinMaxCost = 0;
     InstructionCost ShuffleCost = 0;
-    std::pair<unsigned, MVT> LT =
+    std::pair<InstructionCost, MVT> LT =
         thisT()->getTLI()->getTypeLegalizationCost(DL, Ty);
     unsigned LongVectorCount = 0;
     unsigned MVTLen =
@@ -2047,9 +2135,7 @@ public:
       auto *SubTy = FixedVectorType::get(ScalarTy, NumVecElts);
       CondTy = FixedVectorType::get(ScalarCondTy, NumVecElts);
 
-      // Assume the pairwise shuffles add a cost.
-      ShuffleCost += (IsPairwise + 1) *
-                     thisT()->getShuffleCost(TTI::SK_ExtractSubvector, Ty, None,
+      ShuffleCost += thisT()->getShuffleCost(TTI::SK_ExtractSubvector, Ty, None,
                                              NumVecElts, SubTy);
       MinMaxCost +=
           thisT()->getCmpSelInstrCost(CmpOpcode, SubTy, CondTy,
@@ -2066,14 +2152,7 @@ public:
     // operations performed on the current platform. That's why several final
     // reduction opertions are perfomed on the vectors with the same
     // architecture-dependent length.
-
-    // Non pairwise reductions need one shuffle per reduction level. Pairwise
-    // reductions need two shuffles on every level, but the last one. On that
-    // level one of the shuffles is <0, u, u, ...> which is identity.
-    unsigned NumShuffles = NumReduxLevels;
-    if (IsPairwise && NumReduxLevels >= 1)
-      NumShuffles += NumReduxLevels - 1;
-    ShuffleCost += NumShuffles * thisT()->getShuffleCost(
+    ShuffleCost += NumReduxLevels * thisT()->getShuffleCost(
                                      TTI::SK_PermuteSingleSrc, Ty, None, 0, Ty);
     MinMaxCost +=
         NumReduxLevels *
@@ -2094,7 +2173,7 @@ public:
     // vecreduce.add(ext) or if IsMLA vecreduce.add(mul(ext, ext))
     VectorType *ExtTy = VectorType::get(ResTy, Ty);
     InstructionCost RedCost = thisT()->getArithmeticReductionCost(
-        Instruction::Add, ExtTy, false, CostKind);
+        Instruction::Add, ExtTy, None, CostKind);
     InstructionCost MulCost = 0;
     InstructionCost ExtCost = thisT()->getCastInstrCost(
         IsUnsigned ? Instruction::ZExt : Instruction::SExt, ExtTy, Ty,

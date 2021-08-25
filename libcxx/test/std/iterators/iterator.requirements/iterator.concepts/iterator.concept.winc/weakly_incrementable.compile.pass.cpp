@@ -9,7 +9,6 @@
 // UNSUPPORTED: c++03, c++11, c++14, c++17
 // UNSUPPORTED: libcpp-no-concepts
 // UNSUPPORTED: gcc-10
-// XFAIL: msvc && clang
 
 // template<class In>
 // concept std::weakly_incrementable;
@@ -59,10 +58,10 @@ static_assert(!std::weakly_incrementable<floating_difference_type>);
 static_assert(!std::weakly_incrementable<non_const_minus>);
 static_assert(!std::weakly_incrementable<non_integral_minus>);
 static_assert(!std::weakly_incrementable<bad_difference_type_good_minus>);
-static_assert(!std::weakly_incrementable<not_default_initializable>);
 static_assert(!std::weakly_incrementable<not_movable>);
 static_assert(!std::weakly_incrementable<preinc_not_declared>);
 static_assert(!std::weakly_incrementable<postinc_not_declared>);
+static_assert(std::weakly_incrementable<not_default_initializable>);
 static_assert(std::weakly_incrementable<incrementable_with_difference_type>);
 static_assert(std::weakly_incrementable<incrementable_without_difference_type>);
 static_assert(std::weakly_incrementable<difference_type_and_void_minus>);

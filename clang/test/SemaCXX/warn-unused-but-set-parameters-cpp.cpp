@@ -26,6 +26,11 @@ void f3(struct S s) {
   s = t;
 }
 
+// Also don't warn for a reference.
+void f4(int &x) {
+  x = 0;
+}
+
 // Make sure this doesn't warn.
 struct A {
   int i;

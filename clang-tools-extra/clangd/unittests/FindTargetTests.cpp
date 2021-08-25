@@ -464,7 +464,7 @@ TEST_F(TargetDeclTest, Concept) {
   )cpp";
   EXPECT_DECLS(
       "ConceptSpecializationExpr",
-      {"template <typename T> concept Fooable = requires (T t) { t.foo(); };"});
+      {"template <typename T> concept Fooable = requires (T t) { t.foo(); }"});
 
   // trailing requires clause
   Code = R"cpp(
@@ -475,7 +475,7 @@ TEST_F(TargetDeclTest, Concept) {
       void foo() requires [[Fooable]]<T>;
   )cpp";
   EXPECT_DECLS("ConceptSpecializationExpr",
-               {"template <typename T> concept Fooable = true;"});
+               {"template <typename T> concept Fooable = true"});
 
   // constrained-parameter
   Code = R"cpp(
@@ -486,7 +486,7 @@ TEST_F(TargetDeclTest, Concept) {
     void bar(T t);
   )cpp";
   EXPECT_DECLS("ConceptSpecializationExpr",
-               {"template <typename T> concept Fooable = true;"});
+               {"template <typename T> concept Fooable = true"});
 
   // partial-concept-id
   Code = R"cpp(
@@ -497,7 +497,7 @@ TEST_F(TargetDeclTest, Concept) {
     void bar(T t);
   )cpp";
   EXPECT_DECLS("ConceptSpecializationExpr",
-               {"template <typename T, typename U> concept Fooable = true;"});
+               {"template <typename T, typename U> concept Fooable = true"});
 }
 
 TEST_F(TargetDeclTest, FunctionTemplate) {
@@ -969,6 +969,32 @@ TEST_F(TargetDeclTest, ObjC) {
   )cpp";
   // FIXME: We currently can't disambiguate between multiple protocols.
   EXPECT_DECLS("ObjCObjectTypeLoc", "@protocol Foo", "@protocol Bar");
+
+  Code = R"cpp(
+    @interface Foo
+    + (id)sharedInstance;
+    @end
+    @implementation Foo
+    + (id)sharedInstance { return 0; }
+    @end
+    void test() {
+      id value = [[Foo]].sharedInstance;
+    }
+  )cpp";
+  EXPECT_DECLS("ObjCInterfaceTypeLoc", "@interface Foo");
+
+  Code = R"cpp(
+    @interface Foo
+    + (id)sharedInstance;
+    @end
+    @implementation Foo
+    + (id)sharedInstance { return 0; }
+    @end
+    void test() {
+      id value = Foo.[[sharedInstance]];
+    }
+  )cpp";
+  EXPECT_DECLS("ObjCPropertyRefExpr", "+ (id)sharedInstance");
 }
 
 class FindExplicitReferencesTest : public ::testing::Test {
@@ -1580,6 +1606,21 @@ TEST_F(FindExplicitReferencesTest, All) {
            "5: targets = {t}, decl\n"
            "6: targets = {t}\n"
            "7: targets = {}\n"},
+       // Objective-C: instance variables
+       {
+           R"cpp(
+            @interface I {
+            @public
+              I *_z;
+            }
+            @end
+            I *f;
+            void foo() {
+              $0^f->$1^_z = 0;
+            }
+          )cpp",
+           "0: targets = {f}\n"
+           "1: targets = {I::_z}\n"},
        // Objective-C: properties
        {
            R"cpp(
@@ -1610,6 +1651,41 @@ TEST_F(FindExplicitReferencesTest, All) {
            "0: targets = {f}\n"
            "1: targets = {I::x}\n"
            "2: targets = {I::setY:}\n"},
+       // Objective-C: class properties
+       {
+           R"cpp(
+            @interface I {}
+            @property(class) I *x;
+            @end
+            id local;
+            void foo() {
+              $0^I.$1^x = 0;
+              $2^local = $3^I.$4^x;
+            }
+          )cpp",
+           "0: targets = {I}\n"
+           "1: targets = {I::setX:}\n"
+           "2: targets = {local}\n"
+           "3: targets = {I}\n"
+           "4: targets = {I::x}\n"},
+       // Objective-C: implicit class properties
+       {
+           R"cpp(
+            @interface I {}
+            +(I*)x;
+            +(void)setX:(I*)x;
+            @end
+            id local;
+            void foo() {
+              $0^I.$1^x = 0;
+              $2^local = $3^I.$4^x;
+            }
+          )cpp",
+           "0: targets = {I}\n"
+           "1: targets = {I::setX:}\n"
+           "2: targets = {local}\n"
+           "3: targets = {I}\n"
+           "4: targets = {I::x}\n"},
        {// Objective-C: methods
         R"cpp(
             @interface I
