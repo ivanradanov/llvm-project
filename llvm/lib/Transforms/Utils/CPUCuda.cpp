@@ -158,7 +158,9 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
     StructIndexType = Type::getInt32Ty(C);
   }
 
-  BasicBlock *createNewRetBB(Function *F, BasicBlock *BBFrom, SubkernelIdType ContSK) {
+  BasicBlock *createNewRetBB(BasicBlock *BBFrom, SubkernelIdType ContSK) {
+	  Function *F = Pass->SubkernelFs[SK];
+
     BasicBlock *NewBB = BasicBlock::Create(F->getContext(), "generated_ret_block", F);
     Constant *FromLabel = llvm::ConstantInt::get(Pass->LLVMBBIdType,
                                                  /* value */ Pass->SubkernelBBIds[SK][BBFrom],
@@ -166,52 +168,34 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
     Constant *ContLabel = llvm::ConstantInt::get(Pass->LLVMSubkernelIdType,
                                                  /* value */ ContSK,
                                                  /* isSigned */ true);
-    // Allocate return type
-    auto SKReturnType = Pass->SubkernelReturnType;
-    Value *ReturnVal = static_cast<Value *>(UndefValue::get(SKReturnType));
+    Constant *ReturnVal = ConstantStruct::get(Pass->getSubkernelsReturnType(), {FromLabel, ContLabel});
 
-    // Store from and to
-    ReturnVal = InsertValueInst::Create(ReturnVal, FromLabel,
-                                        ArrayRef<unsigned>({0}),
-                                        "", NewBB);
-    ReturnVal = InsertValueInst::Create(ReturnVal, ContLabel,
-                                        ArrayRef<unsigned>({1}),
-                                        "", NewBB);
+    Value *DataStructPtr = F->getArg(1);
 
-    // Get matching struct type and bitcast the pointer to it
-    auto DataStructType = Pass->getSubkernelReturnDataFieldType(SK, ContSK);
+    ConstantInt *Zero = ConstantInt::get(
+	    Pass->GepIndexType, 0);
 
-    // Populate data struct
-    Value *DataStructVal = static_cast<Value *>(UndefValue::get(DataStructType));
-    {
-      auto UsedVals = Pass->SubkernelUsedVals[SK][ContSK];
-      unsigned i = 0;
-      for (auto &Val : UsedVals) {
-        DataStructVal = InsertValueInst::Create(DataStructVal, Val, ArrayRef<unsigned>({i}), "", NewBB);
-        ++i;
-      }
+    for (auto &Val : Pass->CombinedUsedVals[SK]) {
+	    Instruction *Inst = dyn_cast<Instruction>(Val);
+	    assert(Inst && "Values in CombinedUsedVals must be instructions");
+	    BasicBlock *ValBB = Inst->getParent();
+	    // We are only interested in values which are defined in the current
+	    // subkernel
+      if (!in_vector(Pass->SubkernelBBs[SK], ValBB))
+	      continue;
+
+      // TODO define the type somewhere else
+      ConstantInt *Index = ConstantInt::get(
+	      Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
+      GetElementPtrInst *Gep = GetElementPtrInst::Create(
+	      Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
+      // FIXME It is probably best to define UsedVals, etc. as Instructions and
+      // not Values
+      Instruction *NextInst = Inst->getNextNonDebugInstruction();
+      assert(NextInst && "The Inst must not be a terminator instruction, so a next instruction has to exist");
+      new StoreInst(Val, Gep, NextInst);
     }
 
-    // Reinterpret it as an array and insert it at the data field in the return
-    // value
-
-    // TODO what are the appropriate address spaces for these instructions?
-    auto AddrSpace = Pass->M->getDataLayout().getAllocaAddrSpace();
-    AllocaInst *DataStructValPtr = new AllocaInst(
-      DataStructType,
-      AddrSpace,
-      "", NewBB);
-    auto DataArrayType = SKReturnType->getTypeAtIndex(2);
-    BitCastInst *DataArrayPtr = new BitCastInst(
-      DataStructValPtr,
-      PointerType::get(DataArrayType, AddrSpace),
-      "", NewBB);
-    LoadInst *DataStructAsArray = new LoadInst(DataArrayType, DataArrayPtr, "", NewBB);
-    ReturnVal = InsertValueInst::Create(ReturnVal, DataStructAsArray,
-                                        ArrayRef<unsigned>({2}),
-                                        "", NewBB);
-
-    // Return it
     ReturnInst::Create(C, ReturnVal, NewBB);
 
     return NewBB;
@@ -231,6 +215,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
   void visitBranchInst(BranchInst &I) {
     LLVM_DEBUG(dbgs() << "Transforming BranchInst " << I << "\n");
     Function *F = I.getFunction();
+    assert(F == Pass->SubkernelFs[SK]);
     for (unsigned i = 0; i < I.getNumSuccessors(); i++) {
       BasicBlock *succ = I.getSuccessor(i);
       if (Pass->blockIsAfterBarrier(SK, succ)) {
@@ -240,7 +225,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
         assert(I.getNumSuccessors() == 1);
         auto SuccSK = Pass->findSubkernelFromBB(Pass->SubkernelBBIds[SK][succ]);
         assert(SuccSK != -1 && "There should always be a subkernel from a BB after a barrier");
-        BasicBlock *RetBB = createNewRetBB(F, I.getParent(), SuccSK);
+        BasicBlock *RetBB = createNewRetBB(I.getParent(), SuccSK);
         I.setSuccessor(i, RetBB);
       }
     }
@@ -403,25 +388,12 @@ int CPUCudaPass::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
 }
 
 StructType *CPUCudaPass::getSubkernelsReturnType() {
-  TypeSize maxSize = TypeSize::Fixed(0);
-  for (auto SK : SubkernelIds) {
-    set<SubkernelIdType> SKSuccs = getSubkernelSuccessors(SK);
-    for (auto SuccSK : SKSuccs) {
-      Type *DataFieldType = getSubkernelReturnDataFieldType(SK, SuccSK);
-      TypeSize size = M->getDataLayout().getTypeAllocSize(DataFieldType);
-      if (size > maxSize)
-        maxSize = size;
-    }
-  }
   vector<Type *> types;
   // The BB id we are coming from (for phi instruction handling)
   types.push_back(LLVMBBIdType);
   // The next subkernel to call
   types.push_back(LLVMSubkernelIdType);
-  // Memory for the data struct which will be cast to the appropriate struct
-  // type for the from/to subkernel pair
-  types.push_back(ArrayType::get(Type::getInt8Ty(M->getContext()), maxSize));
-  // Resulting in { from: blockIdType, to: blockIdType, data: [int8] }
+  // Resulting in { from: blockIdType, to: blockIdType }
   return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
@@ -442,34 +414,16 @@ void CPUCudaPass::assignBBIds() {
 }
 
 TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
-  // Get values used in and defined outside the BBs, i.e. the ones that should
-  // be used as an input
-  auto usedVals = SubkernelUsedVals[SK][SK];
+  // Construct the data struct param
+  std::vector<Type *> valparams;
 
-  // Use a struct
-  if (true) {
-    // Construct the data struct param
-    std::vector<Type *> valparams;
-    for (auto val : usedVals) {
-      valparams.push_back(val->getType());
-    }
-    StructType *ValArgs = StructType::get(M->getContext(), ArrayRef<Type *>(valparams));
+  TypeVector params;
+  // The id of the BB we returned from in the previous subkernel (for phi instr)
+  params.push_back(LLVMBBIdType);
+  // Values to be preserved between subkernel calls
+  params.push_back(PointerType::get(CombinedDataType, SubkernelFs[SK]->getAddressSpace()));
 
-    TypeVector params;
-    // The id of the BB we retuned from in the previous subkernel (for phi instr)
-    params.push_back(LLVMBBIdType);
-    // Values to be preserved between subkernel calls
-    params.push_back(ValArgs);
-
-    return params;
-  } else {
-    std::vector<Type *> params;
-    params.push_back(LLVMBBIdType);
-    for (auto val : usedVals) {
-      params.push_back(val->getType());
-    }
-    return params;
-  }
+  return params;
 }
 
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
@@ -526,9 +480,9 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
     for (unsigned i = 0; I != E; ++I, ++i) {
       // The second argument of the function is the structure of usedVals
 	    Value *Val = (*I);
+	    // TODO define the type somewhere else so that it can be easily changed
 	    ConstantInt *Index = ConstantInt::get(
-		    Type::getInt32Ty(nf->getContext()),
-		    getValIndexInCombinedDataType(SK, Val));
+		    GepIndexType, getValIndexInCombinedDataType(SK, Val));
 	    GetElementPtrInst *Gep = GetElementPtrInst::Create(
 		    getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
       LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
@@ -630,9 +584,9 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   // TODO is it needed to reset class members? does this class get newly created
   // for each module?
 
-  LLVMBBIdType = llvm::IntegerType::getInt32Ty(M.getContext());
-  LLVMSubkernelIdType = llvm::IntegerType::getInt32Ty(M.getContext());
-
+  LLVMBBIdType = IntegerType::getInt32Ty(M.getContext());
+  LLVMSubkernelIdType = IntegerType::getInt32Ty(M.getContext());
+  GepIndexType = IntegerType::getInt32Ty(M.getContext());
   for (auto &F : M) {
     this->F = &F;
     // TODO make a clang attribute for this

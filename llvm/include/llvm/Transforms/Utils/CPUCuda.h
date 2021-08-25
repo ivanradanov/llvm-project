@@ -59,6 +59,7 @@ namespace llvm {
 		IntegerType *LLVMBBIdType;
 		IntegerType *LLVMSubkernelIdType;
 		StructType *SubkernelReturnType;
+		IntegerType *GepIndexType;
 
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
