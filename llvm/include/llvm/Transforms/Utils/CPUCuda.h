@@ -49,6 +49,10 @@ namespace llvm {
 		map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
 		map<BBIdType, BasicBlock *> OriginalFunBBs;
 
+		map<SubkernelIdType, map<Value *, int>> IndexInCombinedDataType;
+		map<SubkernelIdType, ValueVector> CombinedUsedVals;
+		StructType *CombinedDataType;
+
 
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
@@ -71,6 +75,8 @@ namespace llvm {
 		void transformSubkernels(SubkernelIdType SK);
 		void findSubkernelBBs(Function &F);
 		void createSubkernels(Function &F);
+		Type *getCombinedDataType();
+		int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

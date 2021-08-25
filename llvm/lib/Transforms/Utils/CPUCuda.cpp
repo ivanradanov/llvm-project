@@ -337,13 +337,32 @@ void CPUCudaPass::createSubkernelFunctionClones() {
 
 void CPUCudaPass::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
+	  ValueVector CombinedUsedVals;
+	  map<Value *, int> IndexInCombinedDataType;
     for (auto _SK : SubkernelIds) {
       // Convert references of basic blocks to the cloned function
       BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], SubkernelFs[_SK], SubkernelFs[SK]);
       ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(SubkernelFs[SK], NFuncBBs);
       SubkernelUsedVals[SK][_SK] = UsedVals;
+
+      for (auto Val : UsedVals) {
+	      if (!in_vector(CombinedUsedVals, Val)) {
+		      IndexInCombinedDataType[Val] = CombinedUsedVals.size();
+		      CombinedUsedVals.push_back(Val);
+	      }
+      }
     }
+    this->CombinedUsedVals[SK] = CombinedUsedVals;
+    this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
   }
+
+  SubkernelIdType SK = 0;
+  ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
+  vector<Type *> Types;
+  for (auto Val : CombinedUsedVals) {
+	  Types.push_back(Val->getType());
+  }
+  CombinedDataType = StructType::get(M->getContext(), Types);
 }
 
 set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
@@ -372,6 +391,15 @@ Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, Subke
     types.push_back(Val->getType());
   }
   return StructType::get(M->getContext(), ArrayRef<Type *>(types));
+}
+
+Type *CPUCudaPass::getCombinedDataType() {
+	return CombinedDataType;
+	assert(false && "impl");
+}
+
+int CPUCudaPass::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
+	return IndexInCombinedDataType[SK][Val];
 }
 
 StructType *CPUCudaPass::getSubkernelsReturnType() {
@@ -490,14 +518,22 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
   {
     BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
 
+    ConstantInt *Zero = ConstantInt::get(Type::getInt32Ty(nf->getContext()), 0);
+
     // Transfer usages of the usedVals to the arguments to the function
     auto I = usedVals.begin(), E = usedVals.end();
     // Unpack args from data struct param and replace usages with them
     for (unsigned i = 0; I != E; ++I, ++i) {
       // The second argument of the function is the structure of usedVals
-      Value *UnpackedArg = ExtractValueInst::Create(nf->getArg(1), i, "", EntryBB);
-      (*I)->replaceAllUsesWith(UnpackedArg);
-      UnpackedArg->takeName(*I);
+	    Value *Val = (*I);
+	    ConstantInt *Index = ConstantInt::get(
+		    Type::getInt32Ty(nf->getContext()),
+		    getValIndexInCombinedDataType(SK, Val));
+	    GetElementPtrInst *Gep = GetElementPtrInst::Create(
+		    getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
+      LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
+      Val->replaceAllUsesWith(UnpackedVal);
+      UnpackedVal->takeName(Val);
     }
 
     // List of BBs which are actually used in phi instructions
