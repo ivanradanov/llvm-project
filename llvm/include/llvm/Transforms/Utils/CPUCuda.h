@@ -29,6 +29,8 @@ namespace llvm {
 
 	typedef vector<Value *> ValueVector;
 	typedef vector<Type *> TypeVector;
+	typedef vector<Instruction *> InstVector;
+	typedef vector<Argument *> ArgVector;
 
 	typedef int SubkernelIdType;
 	typedef int BBIdType;
@@ -78,6 +80,7 @@ namespace llvm {
 		void createSubkernels(Function &F);
 		Type *getCombinedDataType();
 		int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
+		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> Indices);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

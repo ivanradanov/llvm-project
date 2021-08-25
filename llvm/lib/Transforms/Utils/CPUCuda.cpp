@@ -172,8 +172,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
     Value *DataStructPtr = F->getArg(1);
 
-    ConstantInt *Zero = ConstantInt::get(
-      Pass->GepIndexType, 0);
+    ConstantInt *Zero = ConstantInt::get(Pass->GepIndexType, 0);
 
     for (auto &Val : Pass->CombinedUsedVals[SK]) {
       Instruction *Inst = dyn_cast<Instruction>(Val);
@@ -189,13 +188,10 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
       if (!in_vector(Pass->SubkernelBBs[SK], ValBB))
         continue;
 
-      // TODO define the type somewhere else
       ConstantInt *Index = ConstantInt::get(
         Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
         Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
-      // FIXME It is probably best to define UsedVals, etc. as Instructions and
-      // not Values
       Instruction *NextInst = Inst->getNextNonDebugInstruction();
       assert(NextInst && "The Inst must not be a terminator instruction, so a next instruction has to exist");
       new StoreInst(Val, Gep, NextInst);
@@ -325,6 +321,44 @@ void CPUCudaPass::createSubkernelFunctionClones() {
   }
 }
 
+void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> Indices) {
+	InstVector IV;
+	ArgVector AV;
+	for (auto Val : VV) {
+		if (Instruction *I = dyn_cast<Instruction>(Val))
+			IV.push_back(I);
+		else if (Argument *A = dyn_cast<Argument>(Val))
+			AV.push_back(A);
+		else
+			assert(false && "Used vals must be only instructions or arguments");
+	}
+	std::sort(IV.begin(), IV.end(), [&](Instruction *A, Instruction *B) {
+		BasicBlock *BBA = A->getParent();
+		BasicBlock *BBB = B->getParent();
+		if (BBA != BBB) {
+			return this->SubkernelBBIds[SK][BBA] < this->SubkernelBBIds[SK][BBB];
+		} else {
+      return A->comesBefore(B);
+		}
+	});
+	std::sort(AV.begin(), AV.end(), [](Argument *A, Argument *B) {
+		return A->getArgNo() < B->getArgNo();
+	});
+	ValueVector SortedVV;
+	for (auto Arg : AV) {
+		Value *Val = static_cast<Value *>(Arg);
+    Indices[Val] = SortedVV.size();
+    SortedVV.push_back(Val);
+	}
+	for (auto Inst : IV) {
+		Value *Val = static_cast<Value *>(Inst);
+    Indices[Val] = SortedVV.size();
+    SortedVV.push_back(Val);
+	}
+	VV = SortedVV;
+}
+
+// I don't like this implementation, find something better if possible
 void CPUCudaPass::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
     ValueVector CombinedUsedVals;
@@ -337,11 +371,11 @@ void CPUCudaPass::findSubkernelUsedVals() {
 
       for (auto Val : UsedVals) {
         if (!in_vector(CombinedUsedVals, Val)) {
-          IndexInCombinedDataType[Val] = CombinedUsedVals.size();
           CombinedUsedVals.push_back(Val);
         }
       }
     }
+    sortValueVector(SK, CombinedUsedVals, IndexInCombinedDataType);
     this->CombinedUsedVals[SK] = CombinedUsedVals;
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
   }
@@ -349,7 +383,7 @@ void CPUCudaPass::findSubkernelUsedVals() {
   vector<StructType *> CombinedDataTypes;
   for (auto SK : SubkernelIds) {
     ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
-    vector<Type *> Types;
+    TypeVector Types;
     for (auto Val : CombinedUsedVals) {
       Types.push_back(Val->getType());
     }
@@ -491,7 +525,6 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
     for (unsigned i = 0; I != E; ++I, ++i) {
       // The second argument of the function is the structure of usedVals
       Value *Val = (*I);
-      // TODO define the type somewhere else so that it can be easily changed
       ConstantInt *Index = ConstantInt::get(
         GepIndexType, getValIndexInCombinedDataType(SK, Val));
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
@@ -581,9 +614,9 @@ void CPUCudaPass::createSubkernels(Function &F) {
   splitBlocksAroundBarriers(F);
   findSubkernelBBs(F);
   createSubkernelFunctionClones();
+  assignBBIds();
   findSubkernelUsedVals();
   SubkernelReturnType = getSubkernelsReturnType();
-  assignBBIds();
   for (auto SK : SubkernelIds) {
     transformSubkernels(SK);
   }
