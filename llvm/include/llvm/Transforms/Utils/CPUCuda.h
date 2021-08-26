@@ -80,7 +80,7 @@ namespace llvm {
 		void createSubkernels(Function &F);
 		Type *getCombinedDataType();
 		int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
-		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> Indices);
+		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

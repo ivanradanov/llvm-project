@@ -193,7 +193,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
         Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
       Instruction *NextInst = Inst->getNextNonDebugInstruction();
-      assert(NextInst && "The Inst must not be a terminator instruction, so a next instruction has to exist");
+      assert(NextInst && "The Inst must not be a terminator instruction so a next instruction has to exist");
       new StoreInst(Val, Gep, NextInst);
     }
 
@@ -321,7 +321,7 @@ void CPUCudaPass::createSubkernelFunctionClones() {
   }
 }
 
-void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> Indices) {
+void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices) {
 	InstVector IV;
 	ArgVector AV;
 	for (auto Val : VV) {
