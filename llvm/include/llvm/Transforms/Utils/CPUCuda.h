@@ -81,6 +81,7 @@ namespace llvm {
 		Type *getCombinedDataType();
 		int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
 		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
+		void removeReferencesInPhi(const BBVector &BBsToRemove);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

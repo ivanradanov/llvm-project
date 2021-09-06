@@ -190,9 +190,14 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
       ConstantInt *Index = ConstantInt::get(
         Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
-      GetElementPtrInst *Gep = GetElementPtrInst::Create(
-        Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NewBB);
       Instruction *NextInst = Inst->getNextNonDebugInstruction();
+      // If next inst is Phi, we have to get the first following non-phi
+      // instruction because all Phi's must be bunched at the start of a BB
+      if (dyn_cast<PHINode>(NextInst)) {
+	      NextInst = NextInst->getParent()->getFirstNonPHI();
+      }
+      GetElementPtrInst *Gep = GetElementPtrInst::Create(
+        Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
       assert(NextInst && "The Inst must not be a terminator instruction so a next instruction has to exist");
       new StoreInst(Val, Gep, NextInst);
     }
@@ -471,6 +476,30 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
   return params;
 }
 
+void CPUCudaPass::removeReferencesInPhi(const BBVector &BBsToRemove) {
+	for (auto &BB : BBsToRemove) {
+		BBVector Successors;
+		for (auto SuccBB : successors(BB)) {
+			Successors.push_back(SuccBB);
+		}
+		for (auto SuccBB : Successors) {
+			vector<PHINode *> Phis;
+			for (auto &Phi : SuccBB->phis()) {
+				Phis.push_back(&Phi);
+			}
+			for (auto &Phi : Phis) {
+				while (true) {
+					int BBIndex = Phi->getBasicBlockIndex(BB);
+					if (BBIndex != -1)
+						Phi->removeIncomingValue(BBIndex);
+					else
+						break;
+				}
+			}
+		}
+	}
+}
+
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
   Function *_nf = SubkernelFs[SK];
 
@@ -567,6 +596,8 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
         }
       }
     }
+
+    removeReferencesInPhi(BBsToRemove);
 
     // The first argument of the function is the BBId label indicating which BB
     // we came from
