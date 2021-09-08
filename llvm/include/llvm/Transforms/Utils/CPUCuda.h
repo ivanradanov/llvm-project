@@ -28,6 +28,7 @@ namespace llvm {
 	typedef set<BasicBlock *> BBSet;
 
 	typedef vector<Value *> ValueVector;
+	typedef set<Value *> ValueSet;
 	typedef vector<Type *> TypeVector;
 	typedef vector<Instruction *> InstVector;
 	typedef vector<Argument *> ArgVector;
@@ -67,6 +68,7 @@ namespace llvm {
 		bool blockIsAfterBarrier(BasicBlock *BB);
 		bool blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB);
 		void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
+		ValueSet findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
 		void findSubkernelUsedVals();
 		SubkernelIdType findSubkernelFromBB(BBIdType BB);
 		void createSubkernelFunctionClones();

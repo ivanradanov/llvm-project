@@ -73,6 +73,11 @@ bool in_vector(std::vector<T> &v, T key) {
 }
 
 template <class T>
+bool in_set(std::set<T> &v, T key) {
+  return v.end() != std::find(v.begin(), v.end(), key);
+}
+
+template <class T>
 void print_container(T &c) {
   for (auto &el : c) {
     errs() << el << ", ";
@@ -142,6 +147,9 @@ BBVector convert_bb_vector(BBVector &vold, Function *fold, Function *fnew) {
 
 // TODO: additionally to the BB id to continue from, will probably need to
 // return value to indicate the type of barrier that was hit
+
+// NOTE actually the type of barrier we hit can be figured out from the returned
+// BB id which we came from
 struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
   SubkernelIdType SK;
@@ -194,7 +202,7 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
       // If next inst is Phi, we have to get the first following non-phi
       // instruction because all Phi's must be bunched at the start of a BB
       if (dyn_cast<PHINode>(NextInst)) {
-	      NextInst = NextInst->getParent()->getFirstNonPHI();
+        NextInst = NextInst->getParent()->getFirstNonPHI();
       }
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
         Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
@@ -327,52 +335,88 @@ void CPUCudaPass::createSubkernelFunctionClones() {
 }
 
 void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices) {
-	InstVector IV;
-	ArgVector AV;
-	for (auto Val : VV) {
-		if (Instruction *I = dyn_cast<Instruction>(Val))
-			IV.push_back(I);
-		else if (Argument *A = dyn_cast<Argument>(Val))
-			AV.push_back(A);
-		else
-			assert(false && "Used vals must be only instructions or arguments");
-	}
-	std::sort(IV.begin(), IV.end(), [&](Instruction *A, Instruction *B) {
-		BasicBlock *BBA = A->getParent();
-		BasicBlock *BBB = B->getParent();
-		if (BBA != BBB) {
-			return this->SubkernelBBIds[SK][BBA] < this->SubkernelBBIds[SK][BBB];
-		} else {
+  InstVector IV;
+  ArgVector AV;
+  for (auto Val : VV) {
+    if (Instruction *I = dyn_cast<Instruction>(Val))
+      IV.push_back(I);
+    else if (Argument *A = dyn_cast<Argument>(Val))
+      AV.push_back(A);
+    else
+      assert(false && "Used vals must be only instructions or arguments");
+  }
+  std::sort(IV.begin(), IV.end(), [&](Instruction *A, Instruction *B) {
+    BasicBlock *BBA = A->getParent();
+    BasicBlock *BBB = B->getParent();
+    if (BBA != BBB) {
+      return this->SubkernelBBIds[SK][BBA] < this->SubkernelBBIds[SK][BBB];
+    } else {
       return A->comesBefore(B);
-		}
-	});
-	std::sort(AV.begin(), AV.end(), [](Argument *A, Argument *B) {
-		return A->getArgNo() < B->getArgNo();
-	});
-	ValueVector SortedVV;
-	for (auto Arg : AV) {
-		Value *Val = static_cast<Value *>(Arg);
+    }
+  });
+  std::sort(AV.begin(), AV.end(), [](Argument *A, Argument *B) {
+    return A->getArgNo() < B->getArgNo();
+  });
+  ValueVector SortedVV;
+  for (auto Arg : AV) {
+    Value *Val = static_cast<Value *>(Arg);
     Indices[Val] = SortedVV.size();
     SortedVV.push_back(Val);
-	}
-	for (auto Inst : IV) {
-		Value *Val = static_cast<Value *>(Inst);
+  }
+  for (auto Inst : IV) {
+    Value *Val = static_cast<Value *>(Inst);
     Indices[Val] = SortedVV.size();
     SortedVV.push_back(Val);
-	}
-	VV = SortedVV;
+  }
+  VV = SortedVV;
 }
 
-// I don't like this implementation, find something better if possible
+// TODO test this function
+ValueSet CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
+  ValueSet usedVals;
+
+  if (in_vector(visited, BB))
+    return usedVals;
+  visited.push_back(BB);
+
+  // Find all values which were not yet defined but are used
+  for (auto &I : *BB) {
+    definedVals.insert(&I);
+    for (Use &U : I.operands()) {
+      Value *v = U.get();
+      // TODO is that all the cases?
+      // We don't want Constants or Undef values
+      if (isa<Instruction>(v) || isa<Argument>(v))
+        if (!in_set(definedVals, v))
+          usedVals.insert(v);
+    }
+  }
+
+  // Recursively do the same for all basic blocks in the same subkernel
+  for (auto Succ : successors(BB)) {
+    if (blockIsAfterBarrier(SK, Succ))
+      continue;
+    ValueSet _usedVals = findUsedVals(SK, Succ, definedVals, visited);
+    usedVals.insert(_usedVals.begin(), _usedVals.end());
+  }
+
+  return usedVals;
+}
+
+// I don't like this implementation (that it needs sorting), find something
+// better if possible
+
+// Currently only tracks registers and not values written to memory
 void CPUCudaPass::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
+    // Find values which persist across executions of different subkernels
     ValueVector CombinedUsedVals;
     map<Value *, int> IndexInCombinedDataType;
     for (auto _SK : SubkernelIds) {
       // Convert references of basic blocks to the cloned function
-      BBVector NFuncBBs = convert_bb_vector(SubkernelBBs[_SK], SubkernelFs[_SK], SubkernelFs[SK]);
-      ValueVector UsedVals = findValuesUsedInAndDefinedOutsideBBs(SubkernelFs[SK], NFuncBBs);
-      SubkernelUsedVals[SK][_SK] = UsedVals;
+      BasicBlock *_SKEntryBB = convertBasicBlock(SubkernelBBs[_SK][0], SubkernelFs[_SK], SubkernelFs[SK]);
+      ValueSet UsedVals = findUsedVals(SK, _SKEntryBB, ValueSet(), BBVector());
+      SubkernelUsedVals[SK][_SK] = ValueVector(UsedVals.begin(), UsedVals.end());
 
       for (auto Val : UsedVals) {
         if (!in_vector(CombinedUsedVals, Val)) {
@@ -383,6 +427,25 @@ void CPUCudaPass::findSubkernelUsedVals() {
     sortValueVector(SK, CombinedUsedVals, IndexInCombinedDataType);
     this->CombinedUsedVals[SK] = CombinedUsedVals;
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
+
+    // TODO I think the below comment is wrong?
+
+    // The only way a value persists across executions of the same kernel is
+    // when it is passed back to an earlier BB in the same subkernel using a PHI
+    // node or when it is written to memory
+    /*for (auto BB : SubkernelBBs[SK]) {
+      for (const auto Phi : BB->phis()) {
+      for (int i = 0; i < Phi.getNumIncomingValues(); ++i) {
+      BasicBlock *iBB = Phi->getIncomingBlock(i);
+      Value *iVal = Phi->getIncomingValue(i);
+      if (reachableFromEntryWithoutDefinition(SK, Phi)) {
+      SubkernelSelfUsedVals[SK][Phi].
+      }
+      }
+      }
+      }
+    */
+
   }
 
   vector<StructType *> CombinedDataTypes;
@@ -419,14 +482,15 @@ set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
   return Successors;
 }
 
-Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
+// Deprecated
+/*Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
   auto UsedVals = SubkernelUsedVals[FromSK][SuccSK];
   vector<Type *> types;
   for (auto Val : UsedVals) {
-    types.push_back(Val->getType());
+  types.push_back(Val->getType());
   }
   return StructType::get(M->getContext(), ArrayRef<Type *>(types));
-}
+  }*/
 
 Type *CPUCudaPass::getCombinedDataType() {
   return CombinedDataType;
@@ -477,27 +541,27 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
 }
 
 void CPUCudaPass::removeReferencesInPhi(const BBVector &BBsToRemove) {
-	for (auto &BB : BBsToRemove) {
-		BBVector Successors;
-		for (auto SuccBB : successors(BB)) {
-			Successors.push_back(SuccBB);
-		}
-		for (auto SuccBB : Successors) {
-			vector<PHINode *> Phis;
-			for (auto &Phi : SuccBB->phis()) {
-				Phis.push_back(&Phi);
-			}
-			for (auto &Phi : Phis) {
-				while (true) {
-					int BBIndex = Phi->getBasicBlockIndex(BB);
-					if (BBIndex != -1)
-						Phi->removeIncomingValue(BBIndex);
-					else
-						break;
-				}
-			}
-		}
-	}
+  for (auto &BB : BBsToRemove) {
+    BBVector Successors;
+    for (auto SuccBB : successors(BB)) {
+      Successors.push_back(SuccBB);
+    }
+    for (auto SuccBB : Successors) {
+      vector<PHINode *> Phis;
+      for (auto &Phi : SuccBB->phis()) {
+        Phis.push_back(&Phi);
+      }
+      for (auto &Phi : Phis) {
+        while (true) {
+          int BBIndex = Phi->getBasicBlockIndex(BB);
+          if (BBIndex != -1)
+            Phi->removeIncomingValue(BBIndex);
+          else
+            break;
+        }
+      }
+    }
+  }
 }
 
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
