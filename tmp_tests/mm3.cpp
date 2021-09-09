@@ -17,8 +17,8 @@ void __cpucuda_syncthreads();
 #define __syncthreads __cpucuda_syncthreads
 
 #define __global__ __attribute__((cpucuda_global))
-//#define __shared__ __attribute__((cpucuda_shared))
-#define __shared__ __attribute__((annotate("cpucuda_shared")))
+#define __shared__ __attribute__((cpucuda_shared))
+//#define __shared__ __attribute__((annotate("cpucuda_shared")))
 
 // source from here
 

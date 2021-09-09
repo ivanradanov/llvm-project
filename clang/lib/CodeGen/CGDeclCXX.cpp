@@ -510,9 +510,10 @@ CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
   // that are of class type, cannot have a non-empty constructor. All
   // the checks have been done in Sema by now. Whatever initializers
   // are allowed are empty and we just need to ignore them here.
-  if (getLangOpts().CUDAIsDevice && !getLangOpts().GPUAllowDeviceInit &&
-      (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>() ||
-       D->hasAttr<CUDASharedAttr>()))
+	if (D->hasAttr<CPUCUDASharedAttr>() ||
+      (getLangOpts().CUDAIsDevice && !getLangOpts().GPUAllowDeviceInit &&
+       (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>() ||
+        D->hasAttr<CUDASharedAttr>())))
     return;
 
   if (getLangOpts().OpenMP &&

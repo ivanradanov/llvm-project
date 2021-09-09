@@ -263,7 +263,7 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   // variables cannot have an initializer.
   llvm::Constant *Init = nullptr;
   if (Ty.getAddressSpace() == LangAS::opencl_local ||
-      D.hasAttr<CUDASharedAttr>() || D.hasAttr<LoaderUninitializedAttr>())
+      D.hasAttr<CUDASharedAttr>() || D.hasAttr<LoaderUninitializedAttr>() || D.hasAttr<CPUCUDASharedAttr>())
     Init = llvm::UndefValue::get(LTy);
   else
     Init = EmitNullConstant(Ty);
@@ -426,7 +426,7 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   bool isCudaSharedVar = getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
                          D.hasAttr<CUDASharedAttr>();
   // If this value has an initializer, emit it.
-  if (D.getInit() && !isCudaSharedVar)
+  if (D.getInit() && !isCudaSharedVar && !D.hasAttr<CPUCUDASharedAttr>())
     var = AddInitializerToStaticVarDecl(D, var);
 
   var->setAlignment(alignment.getAsAlign());
@@ -1529,6 +1529,15 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // builds.
       address = CreateTempAlloca(allocaTy, allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
+
+      // TODO is this the only place where we have to tag cpucuda shared memory?
+      // What about global shared variables of form 'extern __shared__ Foo
+      // foo[]'?
+      if (D.hasAttr<CPUCUDASharedAttr>()) {
+	      llvm::AllocaInst *AllocaInst = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer());
+	      assert(AllocaInst);
+        AllocaInst->addAnnotationMetadata("cpucuda_shared");
+      }
 
       // Don't emit lifetime markers for MSVC catch parameters. The lifetime of
       // the catch parameter starts in the catchpad instruction, and we can't
