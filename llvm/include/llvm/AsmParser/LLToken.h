@@ -180,6 +180,7 @@ enum Kind {
   kw_allocsize,
   kw_alwaysinline,
   kw_argmemonly,
+  kw_cpucuda_global,
   kw_sanitize_address,
   kw_sanitize_hwaddress,
   kw_sanitize_memtag,

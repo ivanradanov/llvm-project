@@ -947,6 +947,11 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
              (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>())))
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
 
+  if (FD && FD->hasAttr<CPUCUDAGlobalAttr>()) {
+	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
+	  Fn->addFnAttr(llvm::Attribute::NoRecurse);
+  }
+
   if (FD) {
     Builder.setIsFPConstrained(FD->hasAttr<StrictFPAttr>());
     if (FD->hasAttr<StrictFPAttr>())

@@ -1133,6 +1133,13 @@ def CUDADeviceBuiltinTextureType : InheritableAttr {
 def : MutualExclusions<[CUDADeviceBuiltinSurfaceType,
                         CUDADeviceBuiltinTextureType]>;
 
+def CPUCUDAGlobal : InheritableAttr {
+  let Spellings = [GNU<"cpucuda_global">, Declspec<"__cpucuda_global__">];
+  let Subjects = SubjectList<[Function]>;
+  let Documentation = [Undocumented];
+  let SimpleHandler = 1;
+}
+
 def CUDAGlobal : InheritableAttr {
   let Spellings = [GNU<"global">, Declspec<"__global__">];
   let Subjects = SubjectList<[Function]>;
@@ -1173,6 +1180,13 @@ def CUDALaunchBounds : InheritableAttr {
   // of the compiler. However, this node needs to exist in the AST because
   // non-LLVM backends may be relying on the attribute's presence.
   let Documentation = [Undocumented];
+}
+
+def CPUCUDAShared : InheritableAttr {
+  let Spellings = [GNU<"cpucuda_shared">, Declspec<"__cpucuda_shared__">];
+  let Subjects = SubjectList<[Var]>;
+  let Documentation = [Undocumented];
+  let SimpleHandler = 1;
 }
 
 def CUDAShared : InheritableAttr {

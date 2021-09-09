@@ -406,6 +406,9 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
   if (hasAttribute(Attribute::StackAlignment))
     return AttrWithBytesToString("alignstack");
 
+  if (hasAttribute(Attribute::CPUCUDAGlobal))
+	  return AttrWithBytesToString("cpucuda_global");
+
   if (hasAttribute(Attribute::Dereferenceable))
     return AttrWithBytesToString("dereferenceable");
 
