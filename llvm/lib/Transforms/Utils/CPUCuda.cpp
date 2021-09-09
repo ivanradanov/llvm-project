@@ -372,6 +372,9 @@ void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value
 }
 
 // TODO test this function
+
+// I am not sure whether the order in which we visit the BBs might affect the
+// result - PHINode related problems?
 ValueSet CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
   ValueSet usedVals;
 
@@ -725,19 +728,24 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M.getContext());
   GepIndexType = IntegerType::getInt32Ty(M.getContext());
 
+  vector<Function *> OriginalFs;
+
+  // TODO Does this include function declarations without definitions? If so, we
+  // have to treat them separately
   for (auto &F : M) {
-    // TODO HAVE TO RESET CLASS MEMBERS BEFORE EACH ITERATION!!!
+	  OriginalFs.push_back(&F);
+  }
+  // Transform global functions
+  for (auto _F : OriginalFs) {
+	  // TODO HAVE TO RESET CLASS MEMBERS BEFORE EACH ITERATION!!! Or actually
+	  // make a new class of which we create a new member for each function to
+	  // handle
+
+	  Function &F = *_F;
 
     this->F = &F;
-    // TODO make a clang attribute for this
-    if (!F.getName().contains("mat_mul")) {
-      continue;
-    }
-
-    // Will be unneeded when we add the clang attrib
-    if (added_functions.find(&F) != added_functions.end()) {
-      continue;
-    }
+    if (!F.hasFnAttribute(Attribute::CPUCUDAGlobal))
+	    continue;
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
@@ -745,6 +753,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
   }
 
-  // TODO optimise the preserved sets
+  // TODO optimise the preserved sets, although preserving anything seems
+  // unlikely
   return PreservedAnalyses::none();
 }

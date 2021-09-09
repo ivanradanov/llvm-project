@@ -1,8 +1,5 @@
 
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 32
-#endif
-
+// delarations below would be in some header
 struct dim3 {
   unsigned int x, y, z;
 };
@@ -18,6 +15,16 @@ void __cpucuda_syncthreads();
 #define blockDim __cpucuda_blockDim
 #define gridDim __cpucuda_gridDim
 #define __syncthreads __cpucuda_syncthreads
+
+#define __global__ __attribute__((cpucuda_global))
+//#define __shared__ __attribute__((cpucuda_shared))
+#define __shared__ __attribute__((annotate("cpucuda_shared")))
+
+// source from here
+
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 32
+#endif
 
 __global__ void mat_mul(float *A, float *B, float *C, int size_x, int size_y)
 {
