@@ -2883,7 +2883,7 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
     return emitCPUDispatchDefinition(GD);
 
   // If this is CUDA, be selective about which declarations we emit.
-  if (LangOpts.CUDA && !__CUDA_CPU_MODE__) {
+  if (LangOpts.CUDA) {
     if (LangOpts.CUDAIsDevice) {
       if (!Global->hasAttr<CUDADeviceAttr>() &&
           !Global->hasAttr<CUDAGlobalAttr>() &&
@@ -4323,8 +4323,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   // as part of their declaration."  Sema has already checked for
   // error cases, so we just need to set Init to UndefValue.
   bool IsCUDASharedVar =
-	  (getLangOpts().CUDAIsDevice && D->hasAttr<CUDASharedAttr>()) ||
-	  (__CUDA_CPU_MODE__ && D->hasAttr<CUDASharedAttr>());
+      getLangOpts().CUDAIsDevice && D->hasAttr<CUDASharedAttr>();
   // Shadows of initialized device-side global variables are also left
   // undefined.
   // Managed Variables should be initialized on both host side and device side.
@@ -4333,10 +4332,9 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
       (D->hasAttr<CUDAConstantAttr>() || D->hasAttr<CUDADeviceAttr>() ||
        D->hasAttr<CUDASharedAttr>());
   bool IsCUDADeviceShadowVar =
-    (getLangOpts().CUDAIsDevice || __CUDA_CPU_MODE__)
-    && !D->hasAttr<HIPManagedAttr>() &&
-    (D->getType()->isCUDADeviceBuiltinSurfaceType() ||
-     D->getType()->isCUDADeviceBuiltinTextureType());
+      getLangOpts().CUDAIsDevice && !D->hasAttr<HIPManagedAttr>() &&
+      (D->getType()->isCUDADeviceBuiltinSurfaceType() ||
+       D->getType()->isCUDADeviceBuiltinTextureType());
   if (getLangOpts().CUDA &&
       (IsCUDASharedVar || IsCUDAShadowVar || IsCUDADeviceShadowVar))
     Init = llvm::UndefValue::get(getTypes().ConvertTypeForMem(ASTTy));
@@ -4438,16 +4436,12 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   // through the runtime library (cudaGetSymbolAddress() / cudaGetSymbolSize()
   // / cudaMemcpyToSymbol() / cudaMemcpyFromSymbol())."
   if (GV && LangOpts.CUDA) {
-	  if (!__CUDA_CPU_MODE__) {
-		  // TODO_CUDA_CPU first we probably need to implement the capabilities in
-		  // question in our fake cuda before we properly tweak these
-      if (LangOpts.CUDAIsDevice) {
-        if (Linkage != llvm::GlobalValue::InternalLinkage &&
-            (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>()))
-          GV->setExternallyInitialized(true);
-      } else {
-        getCUDARuntime().internalizeDeviceSideVar(D, Linkage);
-      }
+    if (LangOpts.CUDAIsDevice) {
+      if (Linkage != llvm::GlobalValue::InternalLinkage &&
+          (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>()))
+        GV->setExternallyInitialized(true);
+    } else {
+      getCUDARuntime().internalizeDeviceSideVar(D, Linkage);
     }
     getCUDARuntime().handleVarRegistration(D, *GV);
   }

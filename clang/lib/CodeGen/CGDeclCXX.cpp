@@ -178,9 +178,6 @@ void CodeGenFunction::EmitCXXGlobalVarDeclInit(const VarDecl &D,
   const Expr *Init = D.getInit();
   QualType T = D.getType();
 
-  // TODO_CUDA_CPU Do we need to tweak this?
-  // probably not
-
   // The address space of a static local variable (DeclPtr) may be different
   // from the address space of the "this" argument of the constructor. In that
   // case, we need an addrspacecast before calling the constructor.
@@ -513,8 +510,7 @@ CodeGenModule::EmitCXXGlobalVarDeclInitFunc(const VarDecl *D,
   // that are of class type, cannot have a non-empty constructor. All
   // the checks have been done in Sema by now. Whatever initializers
   // are allowed are empty and we just need to ignore them here.
-	if ((getLangOpts().CUDAIsDevice || __CUDA_CPU_MODE__) &&
-	    !getLangOpts().GPUAllowDeviceInit &&
+  if (getLangOpts().CUDAIsDevice && !getLangOpts().GPUAllowDeviceInit &&
       (D->hasAttr<CUDADeviceAttr>() || D->hasAttr<CUDAConstantAttr>() ||
        D->hasAttr<CUDASharedAttr>()))
     return;
