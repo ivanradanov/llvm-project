@@ -371,12 +371,23 @@ void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value
   VV = SortedVV;
 }
 
+bool CPUCudaPass::isSharedVar(Instruction &I) {
+	auto *Metadata = I.getMetadata(LLVMContext::MD_annotation);
+	if (Metadata) {
+		auto *Tuple = cast<MDTuple>(Metadata);
+		for (auto &N : Tuple->operands())
+			if (cast<MDString>(N.get())->getString() == "cpucuda_shared")
+				return true;
+	}
+	return false;
+}
+
 // TODO test this function
 
 // I am not sure whether the order in which we visit the BBs might affect the
 // result - PHINode related problems?
-ValueSet CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
-  ValueSet usedVals;
+UsedValVars CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
+  UsedValVars usedVals;
 
   if (in_vector(visited, BB))
     return usedVals;
@@ -389,9 +400,13 @@ ValueSet CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet 
       Value *v = U.get();
       // TODO is that all the cases?
       // We don't want Constants or Undef values
-      if (isa<Instruction>(v) || isa<Argument>(v))
-        if (!in_set(definedVals, v))
-          usedVals.insert(v);
+      Instruction *UseI = dyn_cast<Instruction>(v);
+      if (UseI || isa<Argument>(v)) {
+	      if (UseI && isSharedVar(*UseI))
+		      usedVals.usedSharedVars.insert(UseI);
+	      else if (!in_set(definedVals, v))
+          usedVals.usedVals.insert(v);
+      }
     }
   }
 
@@ -399,8 +414,8 @@ ValueSet CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet 
   for (auto Succ : successors(BB)) {
     if (blockIsAfterBarrier(SK, Succ))
       continue;
-    ValueSet _usedVals = findUsedVals(SK, Succ, definedVals, visited);
-    usedVals.insert(_usedVals.begin(), _usedVals.end());
+    UsedValVars _usedVals = findUsedVals(SK, Succ, definedVals, visited);
+    usedVals.usedVals.insert(_usedVals.usedVals.begin(), _usedVals.usedVals.end());
   }
 
   return usedVals;
@@ -414,41 +429,37 @@ void CPUCudaPass::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
     // Find values which persist across executions of different subkernels
     ValueVector CombinedUsedVals;
-    map<Value *, int> IndexInCombinedDataType;
     for (auto _SK : SubkernelIds) {
       // Convert references of basic blocks to the cloned function
       BasicBlock *_SKEntryBB = convertBasicBlock(SubkernelBBs[_SK][0], SubkernelFs[_SK], SubkernelFs[SK]);
-      ValueSet UsedVals = findUsedVals(SK, _SKEntryBB, ValueSet(), BBVector());
-      SubkernelUsedVals[SK][_SK] = ValueVector(UsedVals.begin(), UsedVals.end());
+      UsedValVars UsedVals = findUsedVals(SK, _SKEntryBB, ValueSet(), BBVector());
+      SubkernelUsedVals[SK][_SK] = ValueVector(UsedVals.usedVals.begin(), UsedVals.usedVals.end());
+      SubkernelUsedSharedVars[SK][_SK] = InstVector(UsedVals.usedSharedVars.begin(), UsedVals.usedSharedVars.end());
 
-      for (auto Val : UsedVals) {
+      for (auto Val : UsedVals.usedVals) {
         if (!in_vector(CombinedUsedVals, Val)) {
           CombinedUsedVals.push_back(Val);
         }
       }
     }
+
+    map<Value *, int> IndexInCombinedDataType;
     sortValueVector(SK, CombinedUsedVals, IndexInCombinedDataType);
     this->CombinedUsedVals[SK] = CombinedUsedVals;
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
 
-    // TODO I think the below comment is wrong?
-
-    // The only way a value persists across executions of the same kernel is
-    // when it is passed back to an earlier BB in the same subkernel using a PHI
-    // node or when it is written to memory
-    /*for (auto BB : SubkernelBBs[SK]) {
-      for (const auto Phi : BB->phis()) {
-      for (int i = 0; i < Phi.getNumIncomingValues(); ++i) {
-      BasicBlock *iBB = Phi->getIncomingBlock(i);
-      Value *iVal = Phi->getIncomingValue(i);
-      if (reachableFromEntryWithoutDefinition(SK, Phi)) {
-      SubkernelSelfUsedVals[SK][Phi].
-      }
-      }
-      }
-      }
-    */
-
+    ValueVector CombinedSharedVars;
+    for (Instruction *I : this->CombinedSharedVars[SK])
+      CombinedSharedVars.push_back(I);
+    map<Value *, int> IndexInCombinedSharedVarsDataType;
+    sortValueVector(SK, CombinedSharedVars, IndexInCombinedSharedVarsDataType);
+    for (auto &pair : IndexInCombinedSharedVarsDataType) {
+      auto Val = pair.first;
+      auto Index = pair.second;
+      Instruction *I = dyn_cast<Instruction>(Val);
+      assert(I);
+      this->IndexInCombinedSharedVarsDataType[SK][I] = Index;
+    }
   }
 
   vector<StructType *> CombinedDataTypes;
@@ -497,7 +508,6 @@ set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
 
 Type *CPUCudaPass::getCombinedDataType() {
   return CombinedDataType;
-  assert(false && "impl");
 }
 
 int CPUCudaPass::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
@@ -534,11 +544,18 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
   // Construct the data struct param
   std::vector<Type *> valparams;
 
+  // TODO Are the address spaces for these correct?
+
   TypeVector params;
   // The id of the BB we returned from in the previous subkernel (for phi instr)
   params.push_back(LLVMBBIdType);
   // Values to be preserved between subkernel calls
   params.push_back(PointerType::get(CombinedDataType, SubkernelFs[SK]->getAddressSpace()));
+  // Pointer to the struct with shared variables
+  params.push_back(PointerType::get(SharedVarsDataType, SubkernelFs[SK]->getAddressSpace()));
+  // Pointer to the dynamically allocated shared memory TODO actually implement
+  // it
+  params.push_back(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
 
   return params;
 }
@@ -615,19 +632,39 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
     ConstantInt *Zero = ConstantInt::get(Type::getInt32Ty(nf->getContext()), 0);
 
-    // Transfer usages of the usedVals to the arguments to the function
-    auto I = usedVals.begin(), E = usedVals.end();
-    // Unpack args from data struct param and replace usages with them
-    for (unsigned i = 0; I != E; ++I, ++i) {
-      // The second argument of the function is the structure of usedVals
-      Value *Val = (*I);
-      ConstantInt *Index = ConstantInt::get(
-        GepIndexType, getValIndexInCombinedDataType(SK, Val));
-      GetElementPtrInst *Gep = GetElementPtrInst::Create(
-        getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
-      LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
-      Val->replaceAllUsesWith(UnpackedVal);
-      UnpackedVal->takeName(Val);
+    {
+      // Transfer usages of the usedVals to the arguments to the function
+      auto I = usedVals.begin(), E = usedVals.end();
+      // Unpack args from data struct param and replace usages with them
+      for (unsigned i = 0; I != E; ++I, ++i) {
+        // The second argument of the function is the structure of usedVals
+        Value *Val = (*I);
+        ConstantInt *Index = ConstantInt::get(
+          GepIndexType, getValIndexInCombinedDataType(SK, Val));
+        GetElementPtrInst *Gep = GetElementPtrInst::Create(
+          getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
+        LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
+        Val->replaceAllUsesWith(UnpackedVal);
+        UnpackedVal->takeName(Val);
+      }
+    }
+
+    {
+      auto usedSharedVars = SubkernelUsedSharedVars[SK][SK];
+      // Transfer usages of the used shared vars to the arguments to the function
+      auto It = usedSharedVars.begin(), E = usedSharedVars.end();
+      // Unpack args from data struct param and replace usages with them
+      for (unsigned i = 0; It != E; ++It, ++i) {
+        Instruction *I = (*It);
+        ConstantInt *Index = ConstantInt::get(
+          GepIndexType, IndexInCombinedSharedVarsDataType[SK][I]);
+        // The third argument of the function is the structure of shared variables
+        GetElementPtrInst *Gep = GetElementPtrInst::Create(
+          SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
+        I->replaceAllUsesWith(Gep);
+        Gep->takeName(I);
+        I->eraseFromParent();
+	    }
     }
 
     // List of BBs which are actually used in phi instructions
@@ -708,11 +745,32 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 }
 
+void CPUCudaPass::findSharedVars() {
+	// TODO find where variable Alloca's are getting optimised out and disable it
+	// for shared vars
+	for (auto SK : SubkernelIds) {
+		for (auto &BB : *SubkernelFs[SK]) {
+			for (auto &I : BB) {
+				if (isSharedVar(I))
+          CombinedSharedVars[SK].push_back(&I);
+			}
+		}
+	}
+
+	TypeVector Types;
+	for (auto I : CombinedSharedVars[0]) {
+		assert(isa<AllocaInst>(I));
+		Types.push_back(dyn_cast<AllocaInst>(I)->getAllocatedType());
+	}
+	SharedVarsDataType = StructType::get(M->getContext(), Types);
+}
+
 void CPUCudaPass::createSubkernels(Function &F) {
   splitBlocksAroundBarriers(F);
   findSubkernelBBs(F);
   createSubkernelFunctionClones();
   assignBBIds();
+  findSharedVars();
   findSubkernelUsedVals();
   SubkernelReturnType = getSubkernelsReturnType();
   for (auto SK : SubkernelIds) {

@@ -29,6 +29,7 @@ namespace llvm {
 
 	typedef vector<Value *> ValueVector;
 	typedef set<Value *> ValueSet;
+	typedef set<Instruction *> InstSet;
 	typedef vector<Type *> TypeVector;
 	typedef vector<Instruction *> InstVector;
 	typedef vector<Argument *> ArgVector;
@@ -36,6 +37,10 @@ namespace llvm {
 	typedef int SubkernelIdType;
 	typedef int BBIdType;
 
+	struct UsedValVars {
+		ValueSet usedVals;
+		InstSet usedSharedVars;
+	};
 
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
 	public:
@@ -49,6 +54,7 @@ namespace llvm {
 		map<SubkernelIdType, BBVector> SubkernelBBs;
 		map<SubkernelIdType, Function *> SubkernelFs;
 		map<SubkernelIdType, map<SubkernelIdType, ValueVector>> SubkernelUsedVals;
+		map<SubkernelIdType, map<SubkernelIdType, InstVector>> SubkernelUsedSharedVars;
 		map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
 		map<BBIdType, BasicBlock *> OriginalFunBBs;
 
@@ -56,6 +62,9 @@ namespace llvm {
 		map<SubkernelIdType, ValueVector> CombinedUsedVals;
 		StructType *CombinedDataType;
 
+		map<SubkernelIdType, map<Instruction *, int>> IndexInCombinedSharedVarsDataType;
+		map<SubkernelIdType, InstVector> CombinedSharedVars;
+		StructType *SharedVarsDataType;
 
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
@@ -68,7 +77,7 @@ namespace llvm {
 		bool blockIsAfterBarrier(BasicBlock *BB);
 		bool blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB);
 		void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
-		ValueSet findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
+		UsedValVars findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
 		void findSubkernelUsedVals();
 		SubkernelIdType findSubkernelFromBB(BBIdType BB);
 		void createSubkernelFunctionClones();
@@ -79,11 +88,13 @@ namespace llvm {
 		TypeVector getSubkernelParams(SubkernelIdType SK);
 		void transformSubkernels(SubkernelIdType SK);
 		void findSubkernelBBs(Function &F);
+		void findSharedVars();
 		void createSubkernels(Function &F);
 		Type *getCombinedDataType();
 		int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
 		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
 		void removeReferencesInPhi(const BBVector &BBsToRemove);
+		bool isSharedVar(Instruction &I);
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 
