@@ -23,6 +23,95 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
+
+using std::vector;
+using std::set;
+using std::map;
+using std::queue;
+
+typedef vector<BasicBlock *> BBVector;
+typedef queue<BasicBlock *> BBQueue;
+typedef set<BasicBlock *> BBSet;
+
+typedef vector<Value *> ValueVector;
+typedef set<Value *> ValueSet;
+typedef set<Instruction *> InstSet;
+typedef vector<Type *> TypeVector;
+typedef vector<Instruction *> InstVector;
+typedef vector<Argument *> ArgVector;
+
+typedef int SubkernelIdType;
+typedef int BBIdType;
+
+struct UsedValVars {
+  ValueSet usedVals;
+  InstSet usedSharedVars;
+};
+
+class FunctionTransformer {
+public:
+  Module *M;
+  Function *F;
+
+  std::set<BasicBlock *> BlocksAfterBarriers;
+  std::set<Function *> added_functions;
+
+  set<SubkernelIdType> SubkernelIds;
+  map<SubkernelIdType, BBVector> SubkernelBBs;
+  map<SubkernelIdType, Function *> SubkernelFs;
+  map<SubkernelIdType, map<SubkernelIdType, ValueVector>> SubkernelUsedVals;
+  map<SubkernelIdType, map<SubkernelIdType, InstVector>> SubkernelUsedSharedVars;
+  map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
+  map<BBIdType, BasicBlock *> OriginalFunBBs;
+
+  map<SubkernelIdType, map<Value *, int>> IndexInCombinedDataType;
+  map<SubkernelIdType, ValueVector> CombinedUsedVals;
+  StructType *CombinedDataType;
+
+  map<SubkernelIdType, map<Instruction *, int>> IndexInCombinedSharedVarsDataType;
+  map<SubkernelIdType, InstVector> CombinedSharedVars;
+  StructType *SharedVarsDataType;
+
+  Function *DriverFunction;
+
+  // Label type for which BB id we should continue from after we return or we
+  // have come from
+  IntegerType *LLVMBBIdType;
+  IntegerType *LLVMSubkernelIdType;
+  StructType *SubkernelReturnType;
+  IntegerType *GepIndexType;
+  Type *Dim3Type;
+
+  void splitBlocksAroundBarriers(Function &F);
+  bool blockIsAfterBarrier(BasicBlock *BB);
+  bool blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB);
+  void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
+  UsedValVars findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
+  void findSubkernelUsedVals();
+  SubkernelIdType findSubkernelFromBB(BBIdType BB);
+  void createSubkernelFunctionClones();
+  set<SubkernelIdType> getSubkernelSuccessors(SubkernelIdType SK);
+  Type *getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK);
+  StructType *getSubkernelsReturnType();
+  void assignBBIds();
+  TypeVector getSubkernelParams(SubkernelIdType SK);
+  void transformSubkernels(SubkernelIdType SK);
+  void findSubkernelBBs(Function &F);
+  void findSharedVars();
+  void createSubkernels(Function &F);
+  Type *getCombinedDataType();
+  int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
+  void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
+  void removeReferencesInPhi(const BBVector &BBsToRemove);
+  bool isSharedVar(Instruction &I);
+  void createDriverFunction();
+  void replaceDim3Usages();
+  Type *getDim3StructType();
+
+  FunctionTransformer(Function *F);
+
+};
+
 // TODO use proper function name mangling
 bool callIsBarrier(CallInst *callInst) {
   if (Function *calledFunction = callInst->getCalledFunction()) {
@@ -42,7 +131,7 @@ bool instrIsBarrier(Instruction *I) {
   return false;
 }
 
-void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
+void FunctionTransformer::splitBlocksAroundBarriers(Function &F) {
   while ([&]() -> bool {
     for (auto &bb : F) {
       //for (auto &instruction : bb) {
@@ -59,11 +148,11 @@ void CPUCudaPass::splitBlocksAroundBarriers(Function &F) {
   }());
 }
 
-bool CPUCudaPass::blockIsAfterBarrier(BasicBlock *BB) {
+bool FunctionTransformer::blockIsAfterBarrier(BasicBlock *BB) {
   return BlocksAfterBarriers.find(BB) != BlocksAfterBarriers.end();
 }
 
-bool CPUCudaPass::blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB) {
+bool FunctionTransformer::blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB) {
   BasicBlock *OriginalFunBB = OriginalFunBBs[SubkernelBBIds[SK][BB]];
   return BlocksAfterBarriers.find(OriginalFunBB) != BlocksAfterBarriers.end();
 }
@@ -155,11 +244,11 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
   SubkernelIdType SK;
   LLVMContext &C;
-  CPUCudaPass *Pass;
+  FunctionTransformer *Pass;
 
   Type *StructIndexType;
 
-  TransformTerminator(SubkernelIdType SK, CPUCudaPass *Pass):
+  TransformTerminator(SubkernelIdType SK, FunctionTransformer *Pass):
     SK(SK),
     C(Pass->M->getContext()),
     Pass(Pass) {
@@ -276,12 +365,12 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
 };
 
-void CPUCudaPass::findSubkernelBBs(Function &F) {
+void FunctionTransformer::findSubkernelBBs(Function &F) {
   std::set<BasicBlock *> visited;
   _findSubkernelBBs(&F.getEntryBlock(), visited);
 }
 
-void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
+void FunctionTransformer::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
   if (visited.find(BB) != visited.end())
     return;
   visited.insert(BB);
@@ -316,7 +405,7 @@ void CPUCudaPass::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
   assert(BB == func_bbs[0] && (blockIsAfterBarrier(BB) || &F->getEntryBlock() == BB));
 }
 
-SubkernelIdType CPUCudaPass::findSubkernelFromBB(BBIdType BB) {
+SubkernelIdType FunctionTransformer::findSubkernelFromBB(BBIdType BB) {
   for (auto SK : SubkernelIds) {
     if (SubkernelBBIds[SK][SubkernelBBs[SK][0]] == BB)
       return SK;
@@ -324,9 +413,9 @@ SubkernelIdType CPUCudaPass::findSubkernelFromBB(BBIdType BB) {
   return -1;
 }
 
-void CPUCudaPass::createSubkernelFunctionClones() {
+void FunctionTransformer::createSubkernelFunctionClones() {
   for (auto SK : SubkernelIds) {
-    LLVM_DEBUG(dbgs() << "CPUCudaPass - generating new subkernel " << SK << "\n");
+    LLVM_DEBUG(dbgs() << "FunctionTransformer - generating new subkernel " << SK << "\n");
     ValueToValueMapTy VMap;
     // Clone the function to get a clone of the basic blocks
     Function *NF = CloneFunction(F, VMap);
@@ -335,7 +424,7 @@ void CPUCudaPass::createSubkernelFunctionClones() {
   }
 }
 
-void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices) {
+void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices) {
   InstVector IV;
   ArgVector AV;
   for (auto Val : VV) {
@@ -372,7 +461,7 @@ void CPUCudaPass::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value
   VV = SortedVV;
 }
 
-bool CPUCudaPass::isSharedVar(Instruction &I) {
+bool FunctionTransformer::isSharedVar(Instruction &I) {
 	auto *Metadata = I.getMetadata(LLVMContext::MD_annotation);
 	if (Metadata) {
 		auto *Tuple = cast<MDTuple>(Metadata);
@@ -387,7 +476,7 @@ bool CPUCudaPass::isSharedVar(Instruction &I) {
 
 // I am not sure whether the order in which we visit the BBs might affect the
 // result - PHINode related problems?
-UsedValVars CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
+UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
   UsedValVars usedVals;
 
   if (in_vector(visited, BB))
@@ -426,7 +515,7 @@ UsedValVars CPUCudaPass::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueS
 // better if possible
 
 // Currently only tracks registers and not values written to memory
-void CPUCudaPass::findSubkernelUsedVals() {
+void FunctionTransformer::findSubkernelUsedVals() {
   for (auto SK : SubkernelIds) {
     // Find values which persist across executions of different subkernels
     ValueVector CombinedUsedVals;
@@ -478,7 +567,7 @@ void CPUCudaPass::findSubkernelUsedVals() {
   CombinedDataType = CombinedDataTypes[0];
 }
 
-set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
+set<SubkernelIdType> FunctionTransformer::getSubkernelSuccessors(SubkernelIdType SK) {
   set<SubkernelIdType> Successors;
   for (auto BB : SubkernelBBs[SK]) {
     for (auto SuccBB : successors(BB)) {
@@ -498,7 +587,7 @@ set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
 }
 
 // Deprecated
-/*Type *CPUCudaPass::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
+/*Type *FunctionTransformer::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
   auto UsedVals = SubkernelUsedVals[FromSK][SuccSK];
   vector<Type *> types;
   for (auto Val : UsedVals) {
@@ -507,15 +596,15 @@ set<SubkernelIdType> CPUCudaPass::getSubkernelSuccessors(SubkernelIdType SK) {
   return StructType::get(M->getContext(), ArrayRef<Type *>(types));
   }*/
 
-Type *CPUCudaPass::getCombinedDataType() {
+Type *FunctionTransformer::getCombinedDataType() {
   return CombinedDataType;
 }
 
-int CPUCudaPass::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
+int FunctionTransformer::getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val) {
   return IndexInCombinedDataType[SK][Val];
 }
 
-StructType *CPUCudaPass::getSubkernelsReturnType() {
+StructType *FunctionTransformer::getSubkernelsReturnType() {
   vector<Type *> types;
   // The BB id we are coming from (for phi instruction handling)
   types.push_back(LLVMBBIdType);
@@ -525,7 +614,7 @@ StructType *CPUCudaPass::getSubkernelsReturnType() {
   return StructType::get(M->getContext(), ArrayRef<Type *>(types));
 }
 
-void CPUCudaPass::assignBBIds() {
+void FunctionTransformer::assignBBIds() {
   for (auto SK : SubkernelIds) {
     Function *F = SubkernelFs[SK];
     int id = 0;
@@ -541,7 +630,7 @@ void CPUCudaPass::assignBBIds() {
   }
 }
 
-TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
+TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
   // Construct the data struct param
   std::vector<Type *> valparams;
 
@@ -567,7 +656,7 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
   return params;
 }
 
-void CPUCudaPass::removeReferencesInPhi(const BBVector &BBsToRemove) {
+void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
   for (auto &BB : BBsToRemove) {
     BBVector Successors;
     for (auto SuccBB : successors(BB)) {
@@ -593,7 +682,7 @@ void CPUCudaPass::removeReferencesInPhi(const BBVector &BBsToRemove) {
 
 // TODO optimise when usedVals gets populated by simple struct member accesses,
 // for example, currently accesses of dim3 members get added to usedVals
-void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
+void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
   Function *_nf = SubkernelFs[SK];
 
   BBVector nfunc_bbs = SubkernelBBs[SK];
@@ -754,7 +843,7 @@ void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
 
 }
 
-void CPUCudaPass::findSharedVars() {
+void FunctionTransformer::findSharedVars() {
 	// TODO find where variable Alloca's are getting optimised out and disable it
 	// for shared vars
 	for (auto SK : SubkernelIds) {
@@ -774,7 +863,7 @@ void CPUCudaPass::findSharedVars() {
 	SharedVarsDataType = StructType::get(M->getContext(), Types);
 }
 
-void CPUCudaPass::replaceDim3Usages(SubkernelIdType SK) {
+void FunctionTransformer::replaceDim3Usages() {
 	vector<std::string> GlobalNames = {
 		"__cpucuda_gridDim",
 		"__cpucuda_blockIdx",
@@ -799,7 +888,7 @@ void CPUCudaPass::replaceDim3Usages(SubkernelIdType SK) {
 	}
 }
 
-void CPUCudaPass::createSubkernels(Function &F) {
+void FunctionTransformer::createSubkernels(Function &F) {
 	Dim3Type = getDim3StructType();
 	replaceDim3Usages();
   splitBlocksAroundBarriers(F);
@@ -814,7 +903,7 @@ void CPUCudaPass::createSubkernels(Function &F) {
   }
 }
 
-void CPUCudaPass::createDriverFunction() {
+void FunctionTransformer::createDriverFunction() {
 	DriverFunction = NULL;
 }
 
@@ -825,7 +914,7 @@ vector<std::string> Dim3Names = {
 	"__cpucuda_threadIdx"
 };
 
-Type *CPUCudaPass::getDim3StructType() {
+Type *FunctionTransformer::getDim3StructType() {
   for (auto &F : *M)
     for (auto &bb : F)
       for (auto &instruction : bb)
@@ -841,14 +930,23 @@ Type *CPUCudaPass::getDim3StructType() {
   return LLVMBBIdType;
 }
 
+
+FunctionTransformer::FunctionTransformer(Function &F) {
+	M = F->getModule();
+  this->F = &F;
+
+  LLVMBBIdType = IntegerType::getInt32Ty(M->getContext());
+	LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
+	GepIndexType = IntegerType::getInt32Ty(M->getContext());
+
+	createSubkernels(F);
+
+	createDriverFunction();
+
+}
+
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
-  this->M = &M;
-
-  LLVMBBIdType = IntegerType::getInt32Ty(M.getContext());
-  LLVMSubkernelIdType = IntegerType::getInt32Ty(M.getContext());
-  GepIndexType = IntegerType::getInt32Ty(M.getContext());
-
   vector<Function *> OriginalFs;
 
   // TODO Does this include function declarations without definitions? If so, we
@@ -858,9 +956,6 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   }
   // Transform global functions
   for (auto _F : OriginalFs) {
-	  // TODO HAVE TO RESET CLASS MEMBERS BEFORE EACH ITERATION!!! Or actually
-	  // make a new class of which we create a new member for each function to
-	  // handle
 
 	  Function &F = *_F;
 
@@ -870,9 +965,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
-    createSubkernels(F);
-
-    createDriverFunction();
+    FunctionTransformer(F);
 
   }
 
