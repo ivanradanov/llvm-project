@@ -66,12 +66,15 @@ namespace llvm {
 		map<SubkernelIdType, InstVector> CombinedSharedVars;
 		StructType *SharedVarsDataType;
 
+		Function *DriverFunction;
+
 		// Label type for which BB id we should continue from after we return or we
 		// have come from
 		IntegerType *LLVMBBIdType;
 		IntegerType *LLVMSubkernelIdType;
 		StructType *SubkernelReturnType;
 		IntegerType *GepIndexType;
+		Type *Dim3Type;
 
 		void splitBlocksAroundBarriers(Function &F);
 		bool blockIsAfterBarrier(BasicBlock *BB);
@@ -95,6 +98,9 @@ namespace llvm {
 		void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
 		void removeReferencesInPhi(const BBVector &BBsToRemove);
 		bool isSharedVar(Instruction &I);
+		void createDriverFunction();
+		void replaceDim3Usages(SubkernelIdType SK);
+		Type getDim3StructType();
 
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 

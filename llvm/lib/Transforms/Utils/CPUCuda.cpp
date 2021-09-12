@@ -23,6 +23,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
+// TODO use proper function name mangling
 bool callIsBarrier(CallInst *callInst) {
   if (Function *calledFunction = callInst->getCalledFunction()) {
     return calledFunction->getName().endswith("__cpucuda_syncthreadsv");
@@ -557,6 +558,12 @@ TypeVector CPUCudaPass::getSubkernelParams(SubkernelIdType SK) {
   // it
   params.push_back(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
 
+  // gridDim, blockIdx, blockDim, threadIdx
+  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
+  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
+  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
+  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
+
   return params;
 }
 
@@ -584,6 +591,8 @@ void CPUCudaPass::removeReferencesInPhi(const BBVector &BBsToRemove) {
   }
 }
 
+// TODO optimise when usedVals gets populated by simple struct member accesses,
+// for example, currently accesses of dim3 members get added to usedVals
 void CPUCudaPass::transformSubkernels(SubkernelIdType SK) {
   Function *_nf = SubkernelFs[SK];
 
@@ -765,7 +774,34 @@ void CPUCudaPass::findSharedVars() {
 	SharedVarsDataType = StructType::get(M->getContext(), Types);
 }
 
+void CPUCudaPass::replaceDim3Usages(SubkernelIdType SK) {
+	vector<std::string> GlobalNames = {
+		"__cpucuda_gridDim",
+		"__cpucuda_blockIdx",
+		"__cpucuda_blockDim",
+		"__cpucuda_threadIdx"
+	};
+	for (unsigned i = 0; i < GlobalNames.size(); ++i) {
+		Value *Global = M->getGlobalVariable(GlobalNames[i]);
+		// If the Global variable is not used at all it is not included in the
+		// module
+		if (!Global)
+			continue;
+		Value *Param = SubkernelFs[SK]->getArg(4 + i);
+		Global->replaceUsesWithIf(Param, [&](Use &U) {
+			Instruction *I = dyn_cast<Instruction>(U.getUser());
+			if (I && this->SubkernelFs[SK] == I->getFunction()) {
+				return true;
+			} else {
+				return false;
+			}
+		});
+	}
+}
+
 void CPUCudaPass::createSubkernels(Function &F) {
+	Dim3Type = getDim3StructType();
+	replaceDim3Usages();
   splitBlocksAroundBarriers(F);
   findSubkernelBBs(F);
   createSubkernelFunctionClones();
@@ -776,6 +812,33 @@ void CPUCudaPass::createSubkernels(Function &F) {
   for (auto SK : SubkernelIds) {
     transformSubkernels(SK);
   }
+}
+
+void CPUCudaPass::createDriverFunction() {
+	DriverFunction = NULL;
+}
+
+vector<std::string> Dim3Names = {
+	"__cpucuda_gridDim",
+	"__cpucuda_blockIdx",
+	"__cpucuda_blockDim",
+	"__cpucuda_threadIdx"
+};
+
+Type *CPUCudaPass::getDim3StructType() {
+  for (auto &F : *M)
+    for (auto &bb : F)
+      for (auto &instruction : bb)
+        if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
+          if (Function *calledFunction = callInst->getCalledFunction())
+            // TODO use proper function name mangling
+            for (auto &name : Dim3Names)
+              if (calledFunction->getName().endswith(name + "v"))
+                return calledFunction->getReturnType();
+  // Return any random type - this should never happen anyways because all
+  // kernels should use some of the dim3 variables
+  LLVM_DEBUG(dbgs() << "Could not find dim3 struct type from function " << F->getName() << "\n");
+  return LLVMBBIdType;
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
@@ -808,6 +871,8 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
     createSubkernels(F);
+
+    createDriverFunction();
 
   }
 

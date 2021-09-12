@@ -4,16 +4,24 @@ struct dim3 {
   unsigned int x, y, z;
 };
 
-extern dim3 __cpucuda_threadIdx;
-extern dim3 __cpucuda_blockIdx;
-extern dim3 __cpucuda_blockDim;
-extern dim3 __cpucuda_gridDim;
+//extern dim3 __cpucuda_threadIdx;
+//extern dim3 __cpucuda_blockIdx;
+//extern dim3 __cpucuda_blockDim;
+//extern dim3 __cpucuda_gridDim;
+dim3 __cpucuda_threadIdx();
+dim3 __cpucuda_blockIdx();
+dim3 __cpucuda_blockDim();
+dim3 __cpucuda_gridDim();
 void __cpucuda_syncthreads();
 
-#define threadIdx __cpucuda_threadIdx
-#define blockIdx __cpucuda_blockIdx
-#define blockDim __cpucuda_blockDim
-#define gridDim __cpucuda_gridDim
+//#define threadIdx __cpucuda_threadIdx
+//#define blockIdx __cpucuda_blockIdx
+//#define blockDim __cpucuda_blockDim
+//#define gridDim __cpucuda_gridDim
+#define threadIdx __cpucuda_threadIdx()
+#define blockIdx __cpucuda_blockIdx()
+#define blockDim __cpucuda_blockDim()
+#define gridDim __cpucuda_gridDim()
 #define __syncthreads __cpucuda_syncthreads
 
 #define __global__ __attribute__((cpucuda_global))
