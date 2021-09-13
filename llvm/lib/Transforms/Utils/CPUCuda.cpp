@@ -62,7 +62,6 @@ public:
   Function *OriginalF;
 
   std::set<BasicBlock *> BlocksAfterBarriers;
-  std::set<Function *> added_functions;
 
   set<SubkernelIdType> SubkernelIds;
   map<SubkernelIdType, BBVector> SubkernelBBs;
@@ -80,7 +79,7 @@ public:
   map<SubkernelIdType, InstVector> CombinedSharedVars;
   StructType *SharedVarsDataType;
 
-  Function *DriverFunction;
+  Function *DriverF;
 
   // Label type for which BB id we should continue from after we return or we
   // have come from
@@ -103,6 +102,7 @@ public:
   StructType *getSubkernelsReturnType();
   void assignBBIds();
   TypeVector getSubkernelParams(SubkernelIdType SK);
+	vector<std::string> getSubkernelParamNames(SubkernelIdType SK);
   void transformSubkernels(SubkernelIdType SK);
   void findSubkernelBBs(Function &F);
   void findSharedVars();
@@ -639,6 +639,15 @@ void FunctionTransformer::assignBBIds() {
   }
 }
 
+vector<std::string> FunctionTransformer::getSubkernelParamNames(SubkernelIdType SK) {
+	return {
+		"from_bb_id",
+		"preserved_data",
+		"static_shared_data",
+		"dynamic_shared_data"
+	};
+}
+
 TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
   // Construct the data struct param
   std::vector<Type *> valparams;
@@ -693,6 +702,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
   auto usedVals = SubkernelUsedVals[SK][SK];
 
   TypeVector params = getSubkernelParams(SK);
+  vector<std::string> paramNames = getSubkernelParamNames(SK);
 
   // Make a new function which will be the subkernel
   FunctionType *nfty = FunctionType::get(
@@ -701,7 +711,12 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     /* isVarArg */ false);
   Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
                                   F->getName(), F->getParent());
-  added_functions.insert(nf);
+
+  auto NamesIt = paramNames.begin();
+  for (auto &Arg : nf->args()) {
+	  Arg.setName(*NamesIt++);
+  }
+
   // Insert the cloned basic blocks
   nf->getBasicBlockList().splice(nf->begin(), _nf->getBasicBlockList());
   nf->takeName(_nf);
@@ -975,7 +990,19 @@ void FunctionTransformer::createDriverFunction() {
 	  (NewFArgIt++)->setName(Dim3Names[i]);
   }
 
-  DriverFunction = NewF;
+  // Now we have an empty function
+  DriverF = NewF;
+
+  BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
+  ConstantInt *One = ConstantInt::get(GepIndexType, 1);
+  AllocaInst *Data = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(), One, "data", EntryBB);
+  AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
+  // TODO handle dynamic shared data
+  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
+
+
+  // TODO temp
+  ReturnInst::Create(M->getContext(), EntryBB);
 
 }
 
