@@ -993,16 +993,77 @@ void FunctionTransformer::createDriverFunction() {
   // Now we have an empty function
   DriverF = NewF;
 
-  BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
+  ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
   ConstantInt *One = ConstantInt::get(GepIndexType, 1);
-  AllocaInst *Data = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(), One, "data", EntryBB);
+  ConstantInt *Two = ConstantInt::get(GepIndexType, 2);
+  ConstantInt *mOne = ConstantInt::get(GepIndexType, -1);
+
+  BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
+
+  AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(), One, "preserved_data", EntryBB);
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
   // TODO handle dynamic shared data
-  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
+  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
+
+  AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
+
+  GetElementPtrInst *SubkernelRetFromPtr = GetElementPtrInst::Create(
+	  SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
+  SubkernelRetFromPtr->setName("from_ptr");
+  new StoreInst(mOne, SubkernelRetFromPtr, EntryBB);
+
+  GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
+	  SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
+  SubkernelRetNextPtr->setName("next_ptr");
+  new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
+
+  // TODO there seems to be no guarantee as to how this is represented in LLVM -
+  // I have seen it become { i64, i32 } or { i32, i32, i32 }, can we somehow
+  // guarantee the second representation? Is it actually possible for LLVM to
+  // mix up the order of the x, y, z fields?
+  AllocaInst *ThreadIdxPtr = new AllocaInst(Dim3Type, DriverF->getAddressSpace(), One, "threadIdx", EntryBB);
+  /*
+  GetElementPtrInst *ThreadIdxxPtr = GetElementPtrInst::Create(
+    SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
+  GetElementPtrInst *ThreadIdxyPtr = GetElementPtrInst::Create(
+	  SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
+  GetElementPtrInst *ThreadIdxzPtr = GetElementPtrInst::Create(
+	  SubkernelReturnType, SubkernelRetPtr, {Zero, Two}, "", EntryBB);
+  */
+
+  BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
+  BranchInst::Create(WhileEntryBB, EntryBB);
+  LoadInst *Next = new LoadInst(LLVMBBIdType, SubkernelRetNextPtr, "next", WhileEntryBB);
+  LoadInst *From = new LoadInst(LLVMBBIdType, SubkernelRetFromPtr, "from", WhileEntryBB);
+
+  BasicBlock *WhileEndBB = BasicBlock::Create(DriverF->getContext(), "while_end", DriverF);
+  BasicBlock *WhileBodyBB = BasicBlock::Create(DriverF->getContext(), "while_body", DriverF);
+  SwitchInst *Switch = SwitchInst::Create(Next, WhileEndBB, 0, WhileEntryBB);
+
+  for (auto SK : SubkernelIds) {
+	  ConstantInt *CaseConst = llvm::ConstantInt::get(LLVMBBIdType, SK, /* isSigned */ true);
+    BasicBlock *SwitchCaseBB = BasicBlock::Create(DriverF->getContext(), "switch_case", DriverF);
+    Switch->addCase(CaseConst, SwitchCaseBB);
+
+    BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
+    CallInst *SubkernelCall = CallInst::Create(
+	    SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
+	    {From, PreservedData, StaticSharedData, DynSharedData}, "local_ret", SubkernelCallBB);
+    new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
 
 
-  // TODO temp
-  ReturnInst::Create(M->getContext(), EntryBB);
+    // TODO loops and subkernel call here
+
+    BranchInst::Create(WhileEntryBB, SwitchCaseBB);
+  }
+
+
+  ReturnInst::Create(M->getContext(), WhileEndBB);
+
+
+
+
+
 
 }
 
