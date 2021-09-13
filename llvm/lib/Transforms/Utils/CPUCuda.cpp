@@ -1,6 +1,7 @@
 //===-- CPUCuda.cpp - Example Transformations --------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
@@ -61,7 +62,13 @@ public:
   Function *F;
   Function *OriginalF;
 
-  Function *Dim3ConstructorF;
+  struct {
+    Function *ConstructorF;
+    Function *Getterx;
+    Function *Gettery;
+    Function *Getterz;
+    Function *Dim3ToArg;
+  } Dim3Fs;
 
   std::set<BasicBlock *> BlocksAfterBarriers;
 
@@ -118,6 +125,8 @@ public:
   void createDriverFunction();
   void replaceDim3Usages();
   Type *getDim3StructType();
+  void getDim3Fs();
+  ValueVector convertDim3ToArgs(Value *D, Instruction *After);
 
   FunctionTransformer(Module *M, Function *F);
 
@@ -965,7 +974,7 @@ public:
   FunctionTransformer *T;
   Function *F;
 
-  BasicBlock *EntryBB, *CondBB, *IncrBB;
+  BasicBlock *EntryBB, *CondBB, *IncrBB, *EndBB;
   AllocaInst *IdxPtr;
   LoadInst *Idx;
   ICmpInst *Cond;
@@ -976,20 +985,20 @@ public:
     this->F = F;
     this->T = T;
 
-    EntryBB = BasicBlock::Create(F->getContext(), "loop_entry", F);
+    EntryBB = BasicBlock::Create(F->getContext(), "loop_entry" + IdxName, F);
 
     IdxPtr = new AllocaInst(T->Dim3FieldType, F->getAddressSpace(),
                             ConstantInt::get(T->Dim3FieldType, 1),
                             IdxName + "_ptr", EntryBB);
     new StoreInst(ConstantInt::get(T->Dim3FieldType, 0), IdxPtr, EntryBB);
 
-    CondBB = BasicBlock::Create(F->getContext(), "loop_cond", F);
+    CondBB = BasicBlock::Create(F->getContext(), "loop_cond" + IdxName, F);
     BranchInst::Create(CondBB, EntryBB);
 
     Idx = new LoadInst(T->Dim3FieldType, IdxPtr, IdxName, CondBB);
     Cond = new ICmpInst(*CondBB, CmpInst::Predicate::ICMP_EQ, Idx, LoopTo, "cond_eq");
 
-    IncrBB = BasicBlock::Create(F->getContext(), "loop_incr", F);
+    IncrBB = BasicBlock::Create(F->getContext(), "loop_incr" + IdxName, F);
     BinaryOperator *IncrIdx = BinaryOperator::Create(
       Instruction::BinaryOps::Add,
       ConstantInt::get(T->Dim3FieldType, 1),
@@ -998,16 +1007,45 @@ public:
       IncrBB);
     new StoreInst(IncrIdx, IdxPtr, IncrBB);
     BranchInst::Create(CondBB, IncrBB);
+
+    EndBB = BasicBlock::Create(F->getContext(), "loop_end" + IdxName, F);
   }
 
-  void hookUpBBs(BasicBlock *BodyEntryBB, BasicBlock *BodyEndBB,
-                 BasicBlock *FromBB, BasicBlock *ToBB) {
-    BranchInst::Create(EntryBB, FromBB);
-    BranchInst::Create(ToBB, BodyEntryBB, Cond, CondBB);
+  void hookUpBBs(BasicBlock *BodyEntryBB, BasicBlock *BodyEndBB) {
+    BranchInst::Create(EndBB, BodyEntryBB, Cond, CondBB);
     BranchInst::Create(IncrBB, BodyEndBB);
   }
 
 };
+
+ValueVector FunctionTransformer::convertDim3ToArgs(Value *D, Instruction *After) {
+  ValueToValueMapTy VMap;
+  for (auto &BB : *Dim3Fs.Dim3ToArg) {
+    for (auto &_I : BB) {
+      Instruction *I = &_I;
+      if (CallInst *Call = dyn_cast<CallInst>(I))
+        if (Call->getCalledFunction()->getName().contains("__cpucuda_declared_dim3_getter")) {
+          VMap[I] = D;
+          continue;
+        }
+      if (CallInst *Call = dyn_cast<CallInst>(I))
+        if (Call->getCalledFunction()->getName().contains("__cpucuda_declared_dim3_user")) {
+          ValueVector Args;
+          for (unsigned i = 0; i < Call->getNumArgOperands(); ++i) {
+            Args.push_back(VMap[Call->getArgOperand(i)]);
+          }
+          return Args;
+        }
+      auto *NI = I->clone();
+      NI->insertAfter(After);
+      NI->setName(I->getName());
+      VMap[I] = NI;
+      RemapInstruction(NI, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+    }
+  }
+  assert(false && "Unreachable");
+  __builtin_unreachable();
+}
 
 void FunctionTransformer::createDriverFunction() {
   Function *F = OriginalF;
@@ -1044,17 +1082,21 @@ void FunctionTransformer::createDriverFunction() {
   // Now we have an empty function
   DriverF = NewF;
 
+  int Dim3ArgStartIndex = FT->getNumParams();
+  Argument *BlockDimArg = DriverF->getArg(Dim3ArgStartIndex + 2);
+
   ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
   ConstantInt *One = ConstantInt::get(GepIndexType, 1);
-  ConstantInt *Two = ConstantInt::get(GepIndexType, 2);
   ConstantInt *mOne = ConstantInt::get(GepIndexType, -1);
 
   BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
 
   AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(), One, "preserved_data", EntryBB);
+  // TODO !! Populate preserved data with the arguments
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
-  // TODO handle dynamic shared data
+  // TODO Handle dynamic shared data
   UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
+
 
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
@@ -1066,21 +1108,18 @@ void FunctionTransformer::createDriverFunction() {
   GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
     SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
-  new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
+  auto *SI = new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
 
-  // TODO there seems to be no guarantee as to how this is represented in LLVM -
-  // I have seen it become { i64, i32 } or { i32, i32, i32 }, can we somehow
-  // guarantee the second representation? Is it actually possible for LLVM to
-  // mix up the order of the x, y, z fields?
-  AllocaInst *ThreadIdxPtr = new AllocaInst(Dim3Type, DriverF->getAddressSpace(), One, "threadIdx", EntryBB);
-  /*
-    GetElementPtrInst *ThreadIdxxPtr = GetElementPtrInst::Create(
-    SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
-    GetElementPtrInst *ThreadIdxyPtr = GetElementPtrInst::Create(
-    SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
-    GetElementPtrInst *ThreadIdxzPtr = GetElementPtrInst::Create(
-    SubkernelReturnType, SubkernelRetPtr, {Zero, Two}, "", EntryBB);
-  */
+  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, SI);
+  CallInst *BlockDimx = CallInst::Create(
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
+    "blockDim_x", EntryBB);
+  CallInst *BlockDimy = CallInst::Create(
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
+    "blockDim_y", EntryBB);
+  CallInst *BlockDimz = CallInst::Create(
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
+    "blockDim_z", EntryBB);
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
   BranchInst::Create(WhileEntryBB, EntryBB);
@@ -1088,7 +1127,6 @@ void FunctionTransformer::createDriverFunction() {
   LoadInst *From = new LoadInst(LLVMBBIdType, SubkernelRetFromPtr, "from", WhileEntryBB);
 
   BasicBlock *WhileEndBB = BasicBlock::Create(DriverF->getContext(), "while_end", DriverF);
-  BasicBlock *WhileBodyBB = BasicBlock::Create(DriverF->getContext(), "while_body", DriverF);
   SwitchInst *Switch = SwitchInst::Create(Next, WhileEndBB, 0, WhileEntryBB);
 
   for (auto SK : SubkernelIds) {
@@ -1096,25 +1134,27 @@ void FunctionTransformer::createDriverFunction() {
     BasicBlock *SwitchCaseBB = BasicBlock::Create(DriverF->getContext(), "switch_case", DriverF);
     Switch->addCase(CaseConst, SwitchCaseBB);
 
+    ThreadIdxLoop Loopx("threadIdx_x", BlockDimx, DriverF, this);
+    ThreadIdxLoop Loopy("threadIdx_y", BlockDimy, DriverF, this);
+    ThreadIdxLoop Loopz("threadIdx_z", BlockDimz, DriverF, this);
+    Loopx.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
+    Loopy.hookUpBBs(Loopz.EntryBB, Loopz.EndBB);
+
     BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
+
+    // TODO have to store threadIdx here
     CallInst *SubkernelCall = CallInst::Create(
       SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
       {From, PreservedData, StaticSharedData, DynSharedData}, "local_ret", SubkernelCallBB);
     new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
 
+    Loopz.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
 
-    // TODO loops and subkernel call here
-
-    BranchInst::Create(WhileEntryBB, SwitchCaseBB);
+    BranchInst::Create(Loopx.EntryBB, SwitchCaseBB);
+    BranchInst::Create(WhileEntryBB, Loopx.EndBB);
   }
 
-
   ReturnInst::Create(M->getContext(), WhileEndBB);
-
-
-
-
-
 
 }
 
@@ -1143,12 +1183,22 @@ Type *FunctionTransformer::getDim3StructType() {
 // TODO I think we need to inline all usages after we have used it and delete it
 // because otherwise we will get an error about multiple definitions of the same
 // function when linking
-
-Function *getDim3ConstructorF(Module *M) {
+void assignToIfContains(Module *M, Function *&Assign, std::string String) {
+  Assign = nullptr;
   for (auto &F : *M)
-    if (F.getName().contains("__cpucuda_construct_dim3"))
-      return &F;
-  return nullptr;
+    if (F.getName().contains(String)) {
+      Assign = &F;
+      break;
+    }
+  assert(Assign);
+}
+
+void FunctionTransformer::getDim3Fs() {
+  assignToIfContains(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
+  assignToIfContains(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
+  assignToIfContains(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
+  assignToIfContains(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
+  assignToIfContains(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
@@ -1159,9 +1209,8 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
   GepIndexType = IntegerType::getInt32Ty(M->getContext());
   Dim3FieldType = IntegerType::getInt32Ty(M->getContext());
-  Dim3ConstructorF = getDim3ConstructorF(M);
+  getDim3Fs();
   Dim3Type = getDim3StructType();
-  assert(Dim3ConstructorF);
 
   createSubkernels();
 
@@ -1191,6 +1240,8 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
     FunctionTransformer(&M, &F);
 
   }
+
+  // TODO cleanup dim3 helper functions
 
   // TODO optimise the preserved sets, although preserving anything seems
   // unlikely
