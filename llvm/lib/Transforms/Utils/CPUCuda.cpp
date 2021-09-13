@@ -944,7 +944,39 @@ void FunctionTransformer::createSubkernels() {
 }
 
 void FunctionTransformer::createDriverFunction() {
-  DriverFunction = NULL;
+	Function *F = OriginalF;
+
+  FunctionType *FT = F->getFunctionType();
+  TypeVector ArgTypes;
+
+  for (unsigned i = 0; i < FT->getNumParams(); ++i) {
+	  ArgTypes.push_back(FT->getParamType(i));
+  }
+
+  // gridDim, blockIdx, blockDim
+  for (unsigned i = 0; i < Dim3Names.size() - 1; ++i) {
+	  ArgTypes.push_back(Dim3Type);
+  }
+
+  auto NewFT = FunctionType::get(FT->getReturnType(), ArgTypes, false);
+  auto NewF = Function::Create(NewFT, F->getLinkage(), F->getAddressSpace(),
+                               F->getName(), F->getParent());
+
+  ValueToValueMapTy VMap;
+  auto NewFArgIt = NewF->arg_begin();
+  for (auto &Arg : F->args()) {
+	  auto ArgName = Arg.getName();
+	  NewFArgIt->setName(ArgName);
+	  VMap[&Arg] = &(*NewFArgIt);
+
+	  NewFArgIt++;
+  }
+  for (unsigned i = 0; i < Dim3Names.size() - 1; ++i) {
+	  (NewFArgIt++)->setName(Dim3Names[i]);
+  }
+
+  DriverFunction = NewF;
+
 }
 
 Type *FunctionTransformer::getDim3StructType() {
