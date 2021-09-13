@@ -61,6 +61,8 @@ public:
   Function *F;
   Function *OriginalF;
 
+  Function *Dim3ConstructorF;
+
   std::set<BasicBlock *> BlocksAfterBarriers;
 
   set<SubkernelIdType> SubkernelIds;
@@ -87,6 +89,7 @@ public:
   IntegerType *LLVMSubkernelIdType;
   StructType *SubkernelReturnType;
   IntegerType *GepIndexType;
+  IntegerType *Dim3FieldType;
   Type *Dim3Type;
 
   void splitBlocksAroundBarriers(Function &F);
@@ -102,7 +105,7 @@ public:
   StructType *getSubkernelsReturnType();
   void assignBBIds();
   TypeVector getSubkernelParams(SubkernelIdType SK);
-	vector<std::string> getSubkernelParamNames(SubkernelIdType SK);
+  vector<std::string> getSubkernelParamNames(SubkernelIdType SK);
   void transformSubkernels(SubkernelIdType SK);
   void findSubkernelBBs(Function &F);
   void findSharedVars();
@@ -640,12 +643,12 @@ void FunctionTransformer::assignBBIds() {
 }
 
 vector<std::string> FunctionTransformer::getSubkernelParamNames(SubkernelIdType SK) {
-	return {
-		"from_bb_id",
-		"preserved_data",
-		"static_shared_data",
-		"dynamic_shared_data"
-	};
+  return {
+    "from_bb_id",
+    "preserved_data",
+    "static_shared_data",
+    "dynamic_shared_data"
+  };
 }
 
 TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
@@ -714,7 +717,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
   auto NamesIt = paramNames.begin();
   for (auto &Arg : nf->args()) {
-	  Arg.setName(*NamesIt++);
+    Arg.setName(*NamesIt++);
   }
 
   // Insert the cloned basic blocks
@@ -944,7 +947,6 @@ void FunctionTransformer::replaceDim3Usages() {
 }
 
 void FunctionTransformer::createSubkernels() {
-  Dim3Type = getDim3StructType();
   replaceDim3Usages();
   splitBlocksAroundBarriers(*F);
   findSubkernelBBs(*F);
@@ -958,19 +960,68 @@ void FunctionTransformer::createSubkernels() {
   }
 }
 
+class ThreadIdxLoop {
+public:
+  FunctionTransformer *T;
+  Function *F;
+
+  BasicBlock *EntryBB, *CondBB, *IncrBB;
+  AllocaInst *IdxPtr;
+  LoadInst *Idx;
+  ICmpInst *Cond;
+
+  BranchInst *FromCond;
+
+  ThreadIdxLoop(std::string IdxName, Value *LoopTo, Function *F, FunctionTransformer *T) {
+    this->F = F;
+    this->T = T;
+
+    EntryBB = BasicBlock::Create(F->getContext(), "loop_entry", F);
+
+    IdxPtr = new AllocaInst(T->Dim3FieldType, F->getAddressSpace(),
+                            ConstantInt::get(T->Dim3FieldType, 1),
+                            IdxName + "_ptr", EntryBB);
+    new StoreInst(ConstantInt::get(T->Dim3FieldType, 0), IdxPtr, EntryBB);
+
+    CondBB = BasicBlock::Create(F->getContext(), "loop_cond", F);
+    BranchInst::Create(CondBB, EntryBB);
+
+    Idx = new LoadInst(T->Dim3FieldType, IdxPtr, IdxName, CondBB);
+    Cond = new ICmpInst(*CondBB, CmpInst::Predicate::ICMP_EQ, Idx, LoopTo, "cond_eq");
+
+    IncrBB = BasicBlock::Create(F->getContext(), "loop_incr", F);
+    BinaryOperator *IncrIdx = BinaryOperator::Create(
+      Instruction::BinaryOps::Add,
+      ConstantInt::get(T->Dim3FieldType, 1),
+      Idx,
+      IdxName + "_incr",
+      IncrBB);
+    new StoreInst(IncrIdx, IdxPtr, IncrBB);
+    BranchInst::Create(CondBB, IncrBB);
+  }
+
+  void hookUpBBs(BasicBlock *BodyEntryBB, BasicBlock *BodyEndBB,
+                 BasicBlock *FromBB, BasicBlock *ToBB) {
+    BranchInst::Create(EntryBB, FromBB);
+    BranchInst::Create(ToBB, BodyEntryBB, Cond, CondBB);
+    BranchInst::Create(IncrBB, BodyEndBB);
+  }
+
+};
+
 void FunctionTransformer::createDriverFunction() {
-	Function *F = OriginalF;
+  Function *F = OriginalF;
 
   FunctionType *FT = F->getFunctionType();
   TypeVector ArgTypes;
 
   for (unsigned i = 0; i < FT->getNumParams(); ++i) {
-	  ArgTypes.push_back(FT->getParamType(i));
+    ArgTypes.push_back(FT->getParamType(i));
   }
 
   // gridDim, blockIdx, blockDim
   for (unsigned i = 0; i < Dim3Names.size() - 1; ++i) {
-	  ArgTypes.push_back(Dim3Type);
+    ArgTypes.push_back(Dim3Type);
   }
 
   auto NewFT = FunctionType::get(FT->getReturnType(), ArgTypes, false);
@@ -980,14 +1031,14 @@ void FunctionTransformer::createDriverFunction() {
   ValueToValueMapTy VMap;
   auto NewFArgIt = NewF->arg_begin();
   for (auto &Arg : F->args()) {
-	  auto ArgName = Arg.getName();
-	  NewFArgIt->setName(ArgName);
-	  VMap[&Arg] = &(*NewFArgIt);
+    auto ArgName = Arg.getName();
+    NewFArgIt->setName(ArgName);
+    VMap[&Arg] = &(*NewFArgIt);
 
-	  NewFArgIt++;
+    NewFArgIt++;
   }
   for (unsigned i = 0; i < Dim3Names.size() - 1; ++i) {
-	  (NewFArgIt++)->setName(Dim3Names[i]);
+    (NewFArgIt++)->setName(Dim3Names[i]);
   }
 
   // Now we have an empty function
@@ -1008,12 +1059,12 @@ void FunctionTransformer::createDriverFunction() {
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
   GetElementPtrInst *SubkernelRetFromPtr = GetElementPtrInst::Create(
-	  SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
+    SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
   SubkernelRetFromPtr->setName("from_ptr");
   new StoreInst(mOne, SubkernelRetFromPtr, EntryBB);
 
   GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
-	  SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
+    SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
   new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
 
@@ -1023,12 +1074,12 @@ void FunctionTransformer::createDriverFunction() {
   // mix up the order of the x, y, z fields?
   AllocaInst *ThreadIdxPtr = new AllocaInst(Dim3Type, DriverF->getAddressSpace(), One, "threadIdx", EntryBB);
   /*
-  GetElementPtrInst *ThreadIdxxPtr = GetElementPtrInst::Create(
+    GetElementPtrInst *ThreadIdxxPtr = GetElementPtrInst::Create(
     SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
-  GetElementPtrInst *ThreadIdxyPtr = GetElementPtrInst::Create(
-	  SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
-  GetElementPtrInst *ThreadIdxzPtr = GetElementPtrInst::Create(
-	  SubkernelReturnType, SubkernelRetPtr, {Zero, Two}, "", EntryBB);
+    GetElementPtrInst *ThreadIdxyPtr = GetElementPtrInst::Create(
+    SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
+    GetElementPtrInst *ThreadIdxzPtr = GetElementPtrInst::Create(
+    SubkernelReturnType, SubkernelRetPtr, {Zero, Two}, "", EntryBB);
   */
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
@@ -1041,14 +1092,14 @@ void FunctionTransformer::createDriverFunction() {
   SwitchInst *Switch = SwitchInst::Create(Next, WhileEndBB, 0, WhileEntryBB);
 
   for (auto SK : SubkernelIds) {
-	  ConstantInt *CaseConst = llvm::ConstantInt::get(LLVMBBIdType, SK, /* isSigned */ true);
+    ConstantInt *CaseConst = llvm::ConstantInt::get(LLVMBBIdType, SK, /* isSigned */ true);
     BasicBlock *SwitchCaseBB = BasicBlock::Create(DriverF->getContext(), "switch_case", DriverF);
     Switch->addCase(CaseConst, SwitchCaseBB);
 
     BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
     CallInst *SubkernelCall = CallInst::Create(
-	    SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
-	    {From, PreservedData, StaticSharedData, DynSharedData}, "local_ret", SubkernelCallBB);
+      SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
+      {From, PreservedData, StaticSharedData, DynSharedData}, "local_ret", SubkernelCallBB);
     new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
 
 
@@ -1083,6 +1134,22 @@ Type *FunctionTransformer::getDim3StructType() {
   return LLVMBBIdType;
 }
 
+// TODO fix this ugly hack.
+
+// Since we do not know how the dim3 structure will be represented in LLVM IR
+// (It might depend on architecture or OS? I am not sure) this is a function
+// which takes 3 arguments x, y, z and returns a dim3 structure
+
+// TODO I think we need to inline all usages after we have used it and delete it
+// because otherwise we will get an error about multiple definitions of the same
+// function when linking
+
+Function *getDim3ConstructorF(Module *M) {
+  for (auto &F : *M)
+    if (F.getName().contains("__cpucuda_construct_dim3"))
+      return &F;
+  return nullptr;
+}
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   this->M = M;
@@ -1091,6 +1158,10 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   LLVMBBIdType = IntegerType::getInt32Ty(M->getContext());
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
   GepIndexType = IntegerType::getInt32Ty(M->getContext());
+  Dim3FieldType = IntegerType::getInt32Ty(M->getContext());
+  Dim3ConstructorF = getDim3ConstructorF(M);
+  Dim3Type = getDim3StructType();
+  assert(Dim3ConstructorF);
 
   createSubkernels();
 

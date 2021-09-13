@@ -1,8 +1,14 @@
 
 // delarations below would be in some header
 struct dim3 {
-  unsigned int x, y, z;
+  unsigned x, y, z;
+  dim3(unsigned x, unsigned y = 1, unsigned z = 1) : x(x), y(y), z(z) {}
 };
+
+dim3 __cpucuda_construct_dim3(unsigned x, unsigned y, unsigned z) {
+	return dim3(x, y, z);
+}
+
 
 //extern dim3 __cpucuda_threadIdx;
 //extern dim3 __cpucuda_blockIdx;
