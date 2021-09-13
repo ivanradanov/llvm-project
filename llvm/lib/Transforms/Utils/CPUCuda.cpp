@@ -43,6 +43,13 @@ typedef vector<Argument *> ArgVector;
 typedef int SubkernelIdType;
 typedef int BBIdType;
 
+const vector<std::string> Dim3Names = {
+  "gridDim",
+  "blockIdx",
+  "blockDim",
+  "threadIdx"
+};
+
 struct UsedValVars {
   ValueSet usedVals;
   InstSet usedSharedVars;
@@ -52,6 +59,7 @@ class FunctionTransformer {
 public:
   Module *M;
   Function *F;
+  Function *OriginalF;
 
   std::set<BasicBlock *> BlocksAfterBarriers;
   std::set<Function *> added_functions;
@@ -98,7 +106,7 @@ public:
   void transformSubkernels(SubkernelIdType SK);
   void findSubkernelBBs(Function &F);
   void findSharedVars();
-  void createSubkernels(Function &F);
+  void createSubkernels();
   Type *getCombinedDataType();
   int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
   void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
@@ -108,7 +116,7 @@ public:
   void replaceDim3Usages();
   Type *getDim3StructType();
 
-  FunctionTransformer(Function *F);
+  FunctionTransformer(Module *M, Function *F);
 
 };
 
@@ -140,6 +148,7 @@ void FunctionTransformer::splitBlocksAroundBarriers(Function &F) {
         if (instrIsBarrier(&instruction)) {
           auto newbb = SplitBlock(&bb, &instruction);
           BlocksAfterBarriers.insert(newbb);
+          instruction.eraseFromParent();
           return true;
         }
       }
@@ -462,14 +471,14 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
 }
 
 bool FunctionTransformer::isSharedVar(Instruction &I) {
-	auto *Metadata = I.getMetadata(LLVMContext::MD_annotation);
-	if (Metadata) {
-		auto *Tuple = cast<MDTuple>(Metadata);
-		for (auto &N : Tuple->operands())
-			if (cast<MDString>(N.get())->getString() == "cpucuda_shared")
-				return true;
-	}
-	return false;
+  auto *Metadata = I.getMetadata(LLVMContext::MD_annotation);
+  if (Metadata) {
+    auto *Tuple = cast<MDTuple>(Metadata);
+    for (auto &N : Tuple->operands())
+      if (cast<MDString>(N.get())->getString() == "cpucuda_shared")
+        return true;
+  }
+  return false;
 }
 
 // TODO test this function
@@ -492,9 +501,9 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
       // We don't want Constants or Undef values
       Instruction *UseI = dyn_cast<Instruction>(v);
       if (UseI || isa<Argument>(v)) {
-	      if (UseI && isSharedVar(*UseI))
-		      usedVals.usedSharedVars.insert(UseI);
-	      else if (!in_set(definedVals, v))
+        if (UseI && isSharedVar(*UseI))
+          usedVals.usedSharedVars.insert(UseI);
+        else if (!in_set(definedVals, v))
           usedVals.usedVals.insert(v);
       }
     }
@@ -647,12 +656,6 @@ TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
   // it
   params.push_back(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
 
-  // gridDim, blockIdx, blockDim, threadIdx
-  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
-  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
-  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
-  params.push_back(PointerType::get(Dim3Type, SubkernelFs[SK]->getAddressSpace()));
-
   return params;
 }
 
@@ -762,7 +765,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         I->replaceAllUsesWith(Gep);
         Gep->takeName(I);
         I->eraseFromParent();
-	    }
+      }
     }
 
     // List of BBs which are actually used in phi instructions
@@ -844,55 +847,92 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 }
 
 void FunctionTransformer::findSharedVars() {
-	// TODO find where variable Alloca's are getting optimised out and disable it
-	// for shared vars
-	for (auto SK : SubkernelIds) {
-		for (auto &BB : *SubkernelFs[SK]) {
-			for (auto &I : BB) {
-				if (isSharedVar(I))
+  // TODO find where variable Alloca's are getting optimised out and disable it
+  // for shared vars
+  for (auto SK : SubkernelIds) {
+    for (auto &BB : *SubkernelFs[SK]) {
+      for (auto &I : BB) {
+        if (isSharedVar(I))
           CombinedSharedVars[SK].push_back(&I);
-			}
-		}
-	}
+      }
+    }
+  }
 
-	TypeVector Types;
-	for (auto I : CombinedSharedVars[0]) {
-		assert(isa<AllocaInst>(I));
-		Types.push_back(dyn_cast<AllocaInst>(I)->getAllocatedType());
-	}
-	SharedVarsDataType = StructType::get(M->getContext(), Types);
+  TypeVector Types;
+  for (auto I : CombinedSharedVars[0]) {
+    assert(isa<AllocaInst>(I));
+    Types.push_back(dyn_cast<AllocaInst>(I)->getAllocatedType());
+  }
+  SharedVarsDataType = StructType::get(M->getContext(), Types);
 }
 
 void FunctionTransformer::replaceDim3Usages() {
-	vector<std::string> GlobalNames = {
-		"__cpucuda_gridDim",
-		"__cpucuda_blockIdx",
-		"__cpucuda_blockDim",
-		"__cpucuda_threadIdx"
-	};
-	for (unsigned i = 0; i < GlobalNames.size(); ++i) {
-		Value *Global = M->getGlobalVariable(GlobalNames[i]);
-		// If the Global variable is not used at all it is not included in the
-		// module
-		if (!Global)
-			continue;
-		Value *Param = SubkernelFs[SK]->getArg(4 + i);
-		Global->replaceUsesWithIf(Param, [&](Use &U) {
-			Instruction *I = dyn_cast<Instruction>(U.getUser());
-			if (I && this->SubkernelFs[SK] == I->getFunction()) {
-				return true;
-			} else {
-				return false;
-			}
-		});
-	}
+
+  FunctionType *FT = F->getFunctionType();
+  TypeVector ArgTypes;
+
+  for (unsigned i = 0; i < FT->getNumParams(); ++i) {
+    ArgTypes.push_back(FT->getParamType(i));
+  }
+
+  // gridDim, blockIdx, blockDim, threadIdx
+  for (unsigned i = 0; i < Dim3Names.size(); ++i) {
+    ArgTypes.push_back(Dim3Type);
+  }
+
+  auto NewFT = FunctionType::get(FT->getReturnType(), ArgTypes, false);
+  auto NewF = Function::Create(NewFT, F->getLinkage(), F->getAddressSpace(),
+                               F->getName(), F->getParent());
+
+  ValueToValueMapTy VMap;
+  auto NewFArgIt = NewF->arg_begin();
+  for (auto &Arg : F->args()) {
+    auto ArgName = Arg.getName();
+    NewFArgIt->setName(ArgName);
+    VMap[&Arg] = &(*NewFArgIt);
+
+    NewFArgIt++;
+  }
+  for (auto &name : Dim3Names) {
+    (NewFArgIt++)->setName(name);
+  }
+
+  SmallVector<ReturnInst*, 8> Returns;
+  CloneFunctionInto(NewF, F, VMap, CloneFunctionChangeType::LocalChangesOnly, Returns);
+
+  OriginalF = F;
+  F = NewF;
+
+  unsigned Dim3ArgStartIndex = FT->getNumParams();
+
+  // TODO is there another instruction type other than CallInst that might call
+  // the dim3 functions?
+  for (auto &bb : *F)
+    for (auto It = bb.begin(); It != bb.end();) {
+      bool erased = false;
+      auto &instruction = *It;
+      if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
+        if (Function *calledFunction = callInst->getCalledFunction())
+          // TODO use proper function name mangling
+          for (unsigned i = 0; i < Dim3Names.size(); ++i)
+            if (calledFunction->getName().endswith("__cpucuda_" + Dim3Names[i] + "v")) {
+              auto Arg = F->getArg(i + Dim3ArgStartIndex);
+              callInst->replaceAllUsesWith(Arg);
+              It = callInst->eraseFromParent();
+              erased = true;
+              break;
+            }
+      if (!erased)
+        ++It;
+
+    }
 }
 
-void FunctionTransformer::createSubkernels(Function &F) {
-	Dim3Type = getDim3StructType();
-	replaceDim3Usages();
-  splitBlocksAroundBarriers(F);
-  findSubkernelBBs(F);
+void FunctionTransformer::createSubkernels() {
+  Dim3Type = getDim3StructType();
+  replaceDim3Usages();
+  splitBlocksAroundBarriers(*F);
+  findSubkernelBBs(*F);
   createSubkernelFunctionClones();
   assignBBIds();
   findSharedVars();
@@ -904,15 +944,8 @@ void FunctionTransformer::createSubkernels(Function &F) {
 }
 
 void FunctionTransformer::createDriverFunction() {
-	DriverFunction = NULL;
+  DriverFunction = NULL;
 }
-
-vector<std::string> Dim3Names = {
-	"__cpucuda_gridDim",
-	"__cpucuda_blockIdx",
-	"__cpucuda_blockDim",
-	"__cpucuda_threadIdx"
-};
 
 Type *FunctionTransformer::getDim3StructType() {
   for (auto &F : *M)
@@ -922,7 +955,7 @@ Type *FunctionTransformer::getDim3StructType() {
           if (Function *calledFunction = callInst->getCalledFunction())
             // TODO use proper function name mangling
             for (auto &name : Dim3Names)
-              if (calledFunction->getName().endswith(name + "v"))
+              if (calledFunction->getName().endswith("__cpucuda_" + name + "v"))
                 return calledFunction->getReturnType();
   // Return any random type - this should never happen anyways because all
   // kernels should use some of the dim3 variables
@@ -931,17 +964,17 @@ Type *FunctionTransformer::getDim3StructType() {
 }
 
 
-FunctionTransformer::FunctionTransformer(Function &F) {
-	M = F->getModule();
-  this->F = &F;
+FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
+  this->M = M;
+  this->F = F;
 
   LLVMBBIdType = IntegerType::getInt32Ty(M->getContext());
-	LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
-	GepIndexType = IntegerType::getInt32Ty(M->getContext());
+  LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
+  GepIndexType = IntegerType::getInt32Ty(M->getContext());
 
-	createSubkernels(F);
+  createSubkernels();
 
-	createDriverFunction();
+  createDriverFunction();
 
 }
 
@@ -952,20 +985,19 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   // TODO Does this include function declarations without definitions? If so, we
   // have to treat them separately
   for (auto &F : M) {
-	  OriginalFs.push_back(&F);
+    OriginalFs.push_back(&F);
   }
   // Transform global functions
   for (auto _F : OriginalFs) {
 
-	  Function &F = *_F;
+    Function &F = *_F;
 
-    this->F = &F;
     if (!F.hasFnAttribute(Attribute::CPUCUDAGlobal))
-	    continue;
+      continue;
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
-    FunctionTransformer(F);
+    FunctionTransformer(&M, &F);
 
   }
 
