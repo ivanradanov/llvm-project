@@ -24,6 +24,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
+static const int MAX_CUDA_THREADS = 1024
 
 using std::vector;
 using std::set;
@@ -1088,11 +1089,52 @@ void FunctionTransformer::createDriverFunction() {
   ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
   ConstantInt *One = ConstantInt::get(GepIndexType, 1);
   ConstantInt *mOne = ConstantInt::get(GepIndexType, -1);
+  ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
 
   BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
 
-  AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(), One, "preserved_data", EntryBB);
-  // TODO !! Populate preserved data with the arguments
+  AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
+                                             MaxCudaThreads, "preserved_data", EntryBB);
+
+  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, SI);
+  CallInst *BlockDimx = CallInst::Create(
+	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
+	  "blockDim_x", EntryBB);
+  CallInst *BlockDimy = CallInst::Create(
+	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
+	  "blockDim_y", EntryBB);
+  CallInst *BlockDimz = CallInst::Create(
+	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
+	  "blockDim_z", EntryBB);
+
+  BinaryOperator *BlockSize = BinaryOperator::Create(
+	  Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
+  BlockSize = BinaryOperator::Create(
+	  Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+
+  // TODO !! Populate preserved data with the arguments (have to make a Loop up
+  // until BlockSize)
+  vector<int> AddedVals;
+  for (auto SK : SubkernelIds) {
+	  int ArgIdx = 0;
+	  for (auto &Arg : F.args()) {
+		  int DataIdx = IndexInCombinedDataType[SK][&Arg];
+		  if (in_vector(AddedVals, DataIdx))
+			  continue;
+		  AddedVals.push_back(DataIdx);
+
+		  ConstantInt *IdxConst = ConstantInt::get(GepIndexType, DataIdx);
+		  GetElementPtrInst *Gep = GetElementPtrInst::Create(
+        getCombinedDataType(), PreservedData, {Zero, DataIdx}, "", EntryBB);
+
+      new StoreInst(DriverF->getArg(ArgIdx),
+
+
+      ArgIdx++;
+    }
+  }
+
+
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
   // TODO Handle dynamic shared data
   UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
@@ -1109,17 +1151,6 @@ void FunctionTransformer::createDriverFunction() {
     SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
   auto *SI = new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
-
-  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, SI);
-  CallInst *BlockDimx = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
-    "blockDim_x", EntryBB);
-  CallInst *BlockDimy = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
-    "blockDim_y", EntryBB);
-  CallInst *BlockDimz = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
-    "blockDim_z", EntryBB);
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
   BranchInst::Create(WhileEntryBB, EntryBB);
