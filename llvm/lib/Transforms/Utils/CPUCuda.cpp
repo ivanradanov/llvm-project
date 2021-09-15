@@ -24,6 +24,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
+// TODO handle lifetimes if needed?
+
 static const int MAX_CUDA_THREADS = 1024;
 
 using std::vector;
@@ -61,6 +63,8 @@ class FunctionTransformer {
 public:
 	struct {
 		bool DynamicPreservedDataArray = true;
+		bool InlineSubkernels = true;
+		bool InlineDim3Fs = true;
 	} Options;
 
 public:
@@ -1102,6 +1106,8 @@ void FunctionTransformer::createDriverFunction() {
     (NewFArgIt++)->setName(Dim3Names[i]);
   }
 
+  vector<CallInst *> Dim3Calls;
+
   // Now we have an empty function
   DriverF = NewF;
 
@@ -1122,12 +1128,15 @@ void FunctionTransformer::createDriverFunction() {
   CallInst *BlockDimx = CallInst::Create(
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
 	  "blockDim_x", EntryBB);
+  Dim3Calls.push_back(BlockDimx);
   CallInst *BlockDimy = CallInst::Create(
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
 	  "blockDim_y", EntryBB);
+  Dim3Calls.push_back(BlockDimy);
   CallInst *BlockDimz = CallInst::Create(
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
 	  "blockDim_z", EntryBB);
+  Dim3Calls.push_back(BlockDimz);
 
   AllocaInst *PreservedData;
   if (!Options.DynamicPreservedDataArray) {
@@ -1197,6 +1206,7 @@ void FunctionTransformer::createDriverFunction() {
     CallInst *ThreadIdx = CallInst::Create(
 	    Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
 	    {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "threadIdx", SubkernelCallBB);
+    Dim3Calls.push_back(ThreadIdx);
     Args.push_back(ThreadIdx);
     CallInst *SubkernelCall = CallInst::Create(
       SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
@@ -1208,6 +1218,20 @@ void FunctionTransformer::createDriverFunction() {
 
     BranchInst::Create(Loopz.EntryBB, SwitchCaseBB);
     BranchInst::Create(WhileEntryBB, Loopz.EndBB);
+
+    if (Options.InlineSubkernels) {
+	    InlineFunctionInfo IFI;
+	    InlineResult IR = InlineFunction(*SubkernelCall, IFI);
+	    assert(IR.isSuccess());
+    }
+  }
+
+  if (Options.InlineDim3Fs) {
+	  for (auto Dim3Call : Dim3Calls) {
+      InlineFunctionInfo IFI;
+      InlineResult IR = InlineFunction(*Dim3Call, IFI);
+      assert(IR.isSuccess());
+    }
   }
 
   ReturnInst::Create(M->getContext(), WhileEndBB);
@@ -1236,9 +1260,12 @@ Type *FunctionTransformer::getDim3StructType() {
 // (It might depend on architecture or OS? I am not sure) this is a function
 // which takes 3 arguments x, y, z and returns a dim3 structure
 
+// As of now it works for amd64 on linux
+
 // TODO I think we need to inline all usages after we have used it and delete it
 // because otherwise we will get an error about multiple definitions of the same
-// function when linking
+// function when linking Alternatively, we can can change the name so that we
+// make sure it will be unique accross all modules of the program
 void assignToIfContains(Module *M, Function *&Assign, std::string String) {
   Assign = nullptr;
   for (auto &F : *M)
