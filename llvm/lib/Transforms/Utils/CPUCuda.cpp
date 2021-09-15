@@ -24,7 +24,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
-static const int MAX_CUDA_THREADS = 1024
+static const int MAX_CUDA_THREADS = 1024;
 
 using std::vector;
 using std::set;
@@ -113,7 +113,7 @@ public:
   StructType *getSubkernelsReturnType();
   void assignBBIds();
   TypeVector getSubkernelParams(SubkernelIdType SK);
-  vector<std::string> getSubkernelParamNames(SubkernelIdType SK);
+  vector<StringRef> getSubkernelParamNames(SubkernelIdType SK);
   void transformSubkernels(SubkernelIdType SK);
   void findSubkernelBBs(Function &F);
   void findSharedVars();
@@ -128,6 +128,7 @@ public:
   Type *getDim3StructType();
   void getDim3Fs();
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
+	void cleanupFunctions();
 
   FunctionTransformer(Module *M, Function *F);
 
@@ -513,8 +514,9 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
       // TODO is that all the cases?
       // We don't want Constants or Undef values
       Instruction *UseI = dyn_cast<Instruction>(v);
-      if (UseI || isa<Argument>(v)) {
-        if (UseI && isSharedVar(*UseI))
+      // Do not add arguments as we will keep them in the subkernels
+      if (UseI) {
+        if (isSharedVar(*UseI))
           usedVals.usedSharedVars.insert(UseI);
         else if (!in_set(definedVals, v))
           usedVals.usedVals.insert(v);
@@ -652,13 +654,17 @@ void FunctionTransformer::assignBBIds() {
   }
 }
 
-vector<std::string> FunctionTransformer::getSubkernelParamNames(SubkernelIdType SK) {
-  return {
+vector<StringRef> FunctionTransformer::getSubkernelParamNames(SubkernelIdType SK) {
+	vector<StringRef> names = {
     "from_bb_id",
     "preserved_data",
     "static_shared_data",
     "dynamic_shared_data"
-  };
+	};
+  for (auto &Arg : F->args()) {
+	  names.push_back(Arg.getName());
+  }
+	return names;
 }
 
 TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
@@ -677,6 +683,11 @@ TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
   // Pointer to the dynamically allocated shared memory TODO actually implement
   // it
   params.push_back(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
+
+  // The original arguments
+  for (auto &Arg : F->args()) {
+	  params.push_back(Arg.getType());
+  }
 
   return params;
 }
@@ -715,7 +726,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
   auto usedVals = SubkernelUsedVals[SK][SK];
 
   TypeVector params = getSubkernelParams(SK);
-  vector<std::string> paramNames = getSubkernelParamNames(SK);
+  vector<StringRef> paramNames = getSubkernelParamNames(SK);
 
   // Make a new function which will be the subkernel
   FunctionType *nfty = FunctionType::get(
@@ -765,7 +776,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
       // Transfer usages of the usedVals to the arguments to the function
       auto I = usedVals.begin(), E = usedVals.end();
       // Unpack args from data struct param and replace usages with them
-      for (unsigned i = 0; I != E; ++I, ++i) {
+      for (; I != E; ++I) {
         // The second argument of the function is the structure of usedVals
         Value *Val = (*I);
         ConstantInt *Index = ConstantInt::get(
@@ -775,6 +786,12 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
         Val->replaceAllUsesWith(UnpackedVal);
         UnpackedVal->takeName(Val);
+      }
+      // The index at which the original arguments start
+      unsigned i = 4;
+      for (auto &Arg : _nf->args()) {
+	      Arg.replaceAllUsesWith(nf->getArg(i));
+	      ++i;
       }
     }
 
@@ -1096,7 +1113,7 @@ void FunctionTransformer::createDriverFunction() {
   AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
                                              MaxCudaThreads, "preserved_data", EntryBB);
 
-  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, SI);
+  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, PreservedData);
   CallInst *BlockDimx = CallInst::Create(
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
 	  "blockDim_x", EntryBB);
@@ -1112,6 +1129,7 @@ void FunctionTransformer::createDriverFunction() {
   BlockSize = BinaryOperator::Create(
 	  Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
 
+  /*
   // TODO !! Populate preserved data with the arguments (have to make a Loop up
   // until BlockSize)
   vector<int> AddedVals;
@@ -1133,6 +1151,7 @@ void FunctionTransformer::createDriverFunction() {
       ArgIdx++;
     }
   }
+  */
 
 
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
@@ -1150,7 +1169,7 @@ void FunctionTransformer::createDriverFunction() {
   GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
     SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
-  auto *SI = new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
+  new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
   BranchInst::Create(WhileEntryBB, EntryBB);
@@ -1173,11 +1192,21 @@ void FunctionTransformer::createDriverFunction() {
 
     BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
-    // TODO have to store threadIdx here
+    ValueVector Args = {From, PreservedData, StaticSharedData, DynSharedData};
+    // original args + gridDim, blockIdx, blockDim
+    for (auto &Arg : DriverF->args()) {
+	    Args.push_back(&Arg);
+    }
+    // threadIdx
+    CallInst *ThreadIdx = CallInst::Create(
+	    Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
+	    {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "threadIdx", SubkernelCallBB);
+    Args.push_back(ThreadIdx);
     CallInst *SubkernelCall = CallInst::Create(
       SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
-      {From, PreservedData, StaticSharedData, DynSharedData}, "local_ret", SubkernelCallBB);
+      Args, "local_ret", SubkernelCallBB);
     new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
+    // TODO inline those CallInsts
 
     Loopz.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
 
@@ -1232,6 +1261,12 @@ void FunctionTransformer::getDim3Fs() {
   assignToIfContains(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 }
 
+void FunctionTransformer::cleanupFunctions() {
+	std::string NewName = std::string(OriginalF->getName()) + "_original";
+	DriverF->takeName(OriginalF);
+	OriginalF->setName(NewName);
+}
+
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   this->M = M;
   this->F = F;
@@ -1246,6 +1281,8 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   createSubkernels();
 
   createDriverFunction();
+
+  cleanupFunctions();
 
 }
 
