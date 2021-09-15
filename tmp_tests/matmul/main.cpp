@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <random>
 #include <chrono>
 #include <assert.h>
@@ -61,6 +62,39 @@ void populate_array(float *a, int size) {
 		a[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
 }
 
+bool array_equal(float *a, float *b, int size) {
+	double e = 1.e-6;  // epsilon
+	for (int i = 0; i < size; ++i)
+		if (fabs(a[i] - b[i]) > e)
+			return false;
+	return true;
+}
+
+void cpu_mat_mul(float *A, float *B, float *C, int size_m, int size_n, int size_k) {
+  for (int m = 0; m < size_m; m++) {
+    for (int n = 0; n < size_n; n++) {
+	    int Ci = n + m * size_n;
+	    C[Ci] = 0;
+      for (int k = 0; k < size_k; k++) {
+	      int Ai = k + m * size_k;
+	      int Bi = n + k * size_n;
+	      C[Ci] += A[Ai] * B[Bi];
+      }
+    }
+  }
+}
+
+void print_mat(float *A, int size_m, int size_n) {
+	for (int m = 0; m < size_m; m++) {
+		for (int n = 0; n < size_n; n++) {
+			int Ai = n + m * size_n;
+			std::cout << std::fixed << std::setprecision(2) << A[Ai] << " ";
+		}
+		std::cout << std::endl;
+	}
+	std::cout << std::endl;
+}
+
 void run(int block_size, dim3 dimsA, dim3 dimsB) {
 
 	float *A = (float *) aligned_malloc(default_alignment, sizeof(float) * dimsA.x * dimsA.y);
@@ -77,6 +111,13 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
   dim3 grid(dimsB.x / block.x, dimsA.y / block.y);
 
   std::cout << "Executing kernels" << std::endl;
+
+  std::cout << "A" << std::endl;
+  print_mat(A, dimsA.x, dimsA.y);
+  std::cout << "B" << std::endl;
+  print_mat(B, dimsB.x, dimsB.y);
+  std::cout << "C" << std::endl;
+  print_mat(C, dimsC.x, dimsC.y);
 
   auto start = std::chrono::high_resolution_clock::now();
 
@@ -103,6 +144,61 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
 
   std::cout << "Running verification..." << std::endl;
 
+  float *C2 = (float *) aligned_malloc(default_alignment, sizeof(float) * dimsC.x * dimsC.y);
+
+  assert(dimsB.y == dimsA.x);
+  cpu_mat_mul(A, B, C2, dimsA.y, dimsB.x, dimsA.x);
+
+
+  std::cout << "A" << std::endl;
+  print_mat(A, dimsA.x, dimsA.y);
+  std::cout << "B" << std::endl;
+  print_mat(B, dimsB.x, dimsB.y);
+  std::cout << "C" << std::endl;
+  print_mat(C, dimsC.x, dimsC.y);
+  std::cout << "C2" << std::endl;
+  print_mat(C2, dimsC.x, dimsC.y);
+
+  if (array_equal(C, C2, dimsC.x * dimsC.y))
+	  std::cout << "PASS" << std::endl;
+  else
+    std::cout << "FAILED" << std::endl;
+
+  // cpu_mat_mul test
+  if (false) {
+	  int i = 0;
+	  A[i++] = 1;
+	  A[i++] = 2;
+	  A[i++] = 3;
+	  A[i++] = 4;
+	  A[i++] = 5;
+	  A[i++] = 6;
+	  A[i++] = 4;
+	  A[i++] = 5;
+	  A[i++] = 6;
+	  A[i++] = 4;
+	  A[i++] = 5;
+	  A[i++] = 6;
+
+	  i = 0;
+	  B[i++] = 7;
+	  B[i++] = 8;
+	  B[i++] = 9;
+	  B[i++] = 10;
+	  B[i++] = 11;
+	  B[i++] = 12;
+
+	  cpu_mat_mul(A, B, C, 4, 2, 3);
+
+	  std::cout << "A" << std::endl;
+	  print_mat(A, 4, 3);
+	  std::cout << "B" << std::endl;
+	  print_mat(B, 3, 2);
+	  std::cout << "C" << std::endl;
+	  print_mat(C, 4, 2);
+
+	  return;
+  }
 }
 
 int main(int argc, char **argv) {
@@ -110,8 +206,10 @@ int main(int argc, char **argv) {
 
 	int block_size = BLOCK_SIZE;
 
-	dim3 dimsA(5 * 2 * block_size, 5 * 2 * block_size, 1);
-	dim3 dimsB(5 * 4 * block_size, 5 * 2 * block_size, 1);
+	//dim3 dimsA(5 * 2 * block_size, 5 * 2 * block_size, 1);
+	//dim3 dimsB(5 * 4 * block_size, 5 * 2 * block_size, 1);
+	dim3 dimsA(block_size, block_size, 1);
+	dim3 dimsB(block_size, block_size, 1);
 
 	run(block_size, dimsA, dimsB);
 
