@@ -61,11 +61,13 @@ struct UsedValVars {
 
 class FunctionTransformer {
 public:
-	struct {
-		bool DynamicPreservedDataArray = true;
-		bool InlineSubkernels = true;
-		bool InlineDim3Fs = true;
-	} Options;
+  struct {
+    bool DynamicPreservedDataArray = true;
+    bool InlineSubkernels = true;
+    // Actually they always have to be inlined because otherwise we would get
+    // undefined references when linking, so not really an option currently
+    bool InlineDim3Fs = true;
+  } Options;
 
 public:
   Module *M;
@@ -78,6 +80,10 @@ public:
     Function *Gettery;
     Function *Getterz;
     Function *Dim3ToArg;
+
+    Function *RealGridDim;
+    Function *RealBlockDim;
+    Function *RealBlockIdx;
   } Dim3Fs;
 
   std::set<BasicBlock *> BlocksAfterBarriers;
@@ -99,6 +105,7 @@ public:
   StructType *SharedVarsDataType;
 
   Function *DriverF;
+  Function *WrapperF;
 
   // Label type for which BB id we should continue from after we return or we
   // have come from
@@ -137,7 +144,8 @@ public:
   Type *getDim3StructType();
   void getDim3Fs();
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
-	void cleanupFunctions();
+  void cleanupFunctions();
+  void createWrapperFunction();
 
   FunctionTransformer(Module *M, Function *F);
 
@@ -664,16 +672,16 @@ void FunctionTransformer::assignBBIds() {
 }
 
 vector<StringRef> FunctionTransformer::getSubkernelParamNames(SubkernelIdType SK) {
-	vector<StringRef> names = {
+  vector<StringRef> names = {
     "from_bb_id",
     "preserved_data",
     "static_shared_data",
     "dynamic_shared_data"
-	};
+  };
   for (auto &Arg : F->args()) {
-	  names.push_back(Arg.getName());
+    names.push_back(Arg.getName());
   }
-	return names;
+  return names;
 }
 
 TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
@@ -695,7 +703,7 @@ TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
 
   // The original arguments
   for (auto &Arg : F->args()) {
-	  params.push_back(Arg.getType());
+    params.push_back(Arg.getType());
   }
 
   return params;
@@ -799,8 +807,8 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
       // The index at which the original arguments start
       unsigned i = 4;
       for (auto &Arg : _nf->args()) {
-	      Arg.replaceAllUsesWith(nf->getArg(i));
-	      ++i;
+        Arg.replaceAllUsesWith(nf->getArg(i));
+        ++i;
       }
     }
 
@@ -1126,30 +1134,30 @@ void FunctionTransformer::createDriverFunction() {
 
   ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, StaticSharedData);
   CallInst *BlockDimx = CallInst::Create(
-	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
-	  "blockDim_x", EntryBB);
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
+    "blockDim_x", EntryBB);
   Dim3Calls.push_back(BlockDimx);
   CallInst *BlockDimy = CallInst::Create(
-	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
-	  "blockDim_y", EntryBB);
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
+    "blockDim_y", EntryBB);
   Dim3Calls.push_back(BlockDimy);
   CallInst *BlockDimz = CallInst::Create(
-	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
-	  "blockDim_z", EntryBB);
+    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
+    "blockDim_z", EntryBB);
   Dim3Calls.push_back(BlockDimz);
 
   AllocaInst *PreservedData;
   if (!Options.DynamicPreservedDataArray) {
-	  ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
+    ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
     PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
                                    MaxCudaThreads, "preserved_data", EntryBB);
   } else {
-	  BinaryOperator *BlockSize = BinaryOperator::Create(
-		  Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
-	  BlockSize = BinaryOperator::Create(
-		  Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
-	  PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
-	                                 BlockSize, "preserved_data", EntryBB);
+    BinaryOperator *BlockSize = BinaryOperator::Create(
+      Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
+    BlockSize = BinaryOperator::Create(
+      Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+    PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
+                                   BlockSize, "preserved_data", EntryBB);
   }
 
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
@@ -1190,22 +1198,22 @@ void FunctionTransformer::createDriverFunction() {
     PreservedDataIdx = BinaryOperator::Create(
       Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
     PreservedDataIdx = BinaryOperator::Create(
-	    Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+      Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
     PreservedDataIdx = BinaryOperator::Create(
-	    Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+      Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
 
     GetElementPtrInst *ThreadPreservedData = GetElementPtrInst::Create(
-	    CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
+      CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
 
     ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
     // original args + gridDim, blockIdx, blockDim
     for (auto &Arg : DriverF->args()) {
-	    Args.push_back(&Arg);
+      Args.push_back(&Arg);
     }
     // threadIdx
     CallInst *ThreadIdx = CallInst::Create(
-	    Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
-	    {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "threadIdx", SubkernelCallBB);
+      Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
+      {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "threadIdx", SubkernelCallBB);
     Dim3Calls.push_back(ThreadIdx);
     Args.push_back(ThreadIdx);
     CallInst *SubkernelCall = CallInst::Create(
@@ -1220,14 +1228,14 @@ void FunctionTransformer::createDriverFunction() {
     BranchInst::Create(WhileEntryBB, Loopz.EndBB);
 
     if (Options.InlineSubkernels) {
-	    InlineFunctionInfo IFI;
-	    InlineResult IR = InlineFunction(*SubkernelCall, IFI);
-	    assert(IR.isSuccess());
+      InlineFunctionInfo IFI;
+      InlineResult IR = InlineFunction(*SubkernelCall, IFI);
+      assert(IR.isSuccess());
     }
   }
 
   if (Options.InlineDim3Fs) {
-	  for (auto Dim3Call : Dim3Calls) {
+    for (auto Dim3Call : Dim3Calls) {
       InlineFunctionInfo IFI;
       InlineResult IR = InlineFunction(*Dim3Call, IFI);
       assert(IR.isSuccess());
@@ -1282,12 +1290,70 @@ void FunctionTransformer::getDim3Fs() {
   assignToIfContains(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
   assignToIfContains(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
   assignToIfContains(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
+
+  assignToIfContains(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
+  assignToIfContains(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
+  assignToIfContains(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
+
+  // This function exists only to make sure the above _real_ functions get
+  // included in the llvm module - find out how to do this properly TODO
+  Function *User;
+  assignToIfContains(M, User, "__cpucuda_real_func_user");
+  User->eraseFromParent();
+}
+
+void FunctionTransformer::createWrapperFunction() {
+  auto NewF = Function::Create(OriginalF->getFunctionType(), OriginalF->getLinkage(), OriginalF->getAddressSpace(),
+                               OriginalF->getName(), OriginalF->getParent());
+
+  auto NewFArgIt = NewF->arg_begin();
+  for (auto &Arg : OriginalF->args()) {
+    auto ArgName = Arg.getName();
+    NewFArgIt->setName(ArgName);
+    NewFArgIt++;
+  }
+
+  // Now we have an empty function
+  WrapperF = NewF;
+
+  BasicBlock *EntryBB = BasicBlock::Create(WrapperF->getContext(), "entry", WrapperF);
+  CallInst *GridDim = CallInst::Create(
+    Dim3Fs.RealGridDim->getFunctionType(), Dim3Fs.RealGridDim, {},
+    "gridDim", EntryBB);
+  CallInst *BlockDim = CallInst::Create(
+    Dim3Fs.RealBlockDim->getFunctionType(), Dim3Fs.RealBlockDim, {},
+    "blockDim", EntryBB);
+  CallInst *BlockIdx = CallInst::Create(
+    Dim3Fs.RealBlockIdx->getFunctionType(), Dim3Fs.RealBlockIdx, {},
+    "blockIdx", EntryBB);
+
+  ValueVector Args;
+  for (auto &Arg : WrapperF->args()) {
+    Args.push_back(&Arg);
+  }
+  Args.push_back(GridDim);
+  Args.push_back(BlockIdx);
+  Args.push_back(BlockDim);
+
+
+  CallInst *DriverCall = CallInst::Create(
+    DriverF->getFunctionType(), DriverF, Args,
+    "", EntryBB);
+
+  ReturnInst::Create(M->getContext(), EntryBB);
+
+  InlineFunctionInfo IFI;
+  InlineResult IR = InlineFunction(*DriverCall, IFI);
+  assert(IR.isSuccess());
 }
 
 void FunctionTransformer::cleanupFunctions() {
-	std::string NewName = std::string(OriginalF->getName()) + "_original";
-	DriverF->takeName(OriginalF);
-	OriginalF->setName(NewName);
+  std::string NewName = std::string(OriginalF->getName()) + "_original";
+  WrapperF->takeName(OriginalF);
+  OriginalF->setName(NewName);
+
+  OriginalF->eraseFromParent();
+  Dim3Fs.Dim3ToArg->eraseFromParent();
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
@@ -1304,6 +1370,8 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   createSubkernels();
 
   createDriverFunction();
+
+  createWrapperFunction();
 
   cleanupFunctions();
 
