@@ -59,6 +59,11 @@ struct UsedValVars {
 
 class FunctionTransformer {
 public:
+	struct {
+		bool DynamicPreservedDataArray = true;
+	} Options;
+
+public:
   Module *M;
   Function *F;
   Function *OriginalF;
@@ -1106,14 +1111,14 @@ void FunctionTransformer::createDriverFunction() {
   ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
   ConstantInt *One = ConstantInt::get(GepIndexType, 1);
   ConstantInt *mOne = ConstantInt::get(GepIndexType, -1);
-  ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
 
   BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
 
-  AllocaInst *PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
-                                             MaxCudaThreads, "preserved_data", EntryBB);
+  AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
+  // TODO Handle dynamic shared data
+  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
 
-  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, PreservedData);
+  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, StaticSharedData);
   CallInst *BlockDimx = CallInst::Create(
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
 	  "blockDim_x", EntryBB);
@@ -1124,40 +1129,19 @@ void FunctionTransformer::createDriverFunction() {
 	  Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
 	  "blockDim_z", EntryBB);
 
-  BinaryOperator *BlockSize = BinaryOperator::Create(
-	  Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
-  BlockSize = BinaryOperator::Create(
-	  Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
-
-  /*
-  // TODO !! Populate preserved data with the arguments (have to make a Loop up
-  // until BlockSize)
-  vector<int> AddedVals;
-  for (auto SK : SubkernelIds) {
-	  int ArgIdx = 0;
-	  for (auto &Arg : F.args()) {
-		  int DataIdx = IndexInCombinedDataType[SK][&Arg];
-		  if (in_vector(AddedVals, DataIdx))
-			  continue;
-		  AddedVals.push_back(DataIdx);
-
-		  ConstantInt *IdxConst = ConstantInt::get(GepIndexType, DataIdx);
-		  GetElementPtrInst *Gep = GetElementPtrInst::Create(
-        getCombinedDataType(), PreservedData, {Zero, DataIdx}, "", EntryBB);
-
-      new StoreInst(DriverF->getArg(ArgIdx),
-
-
-      ArgIdx++;
-    }
+  AllocaInst *PreservedData;
+  if (!Options.DynamicPreservedDataArray) {
+	  ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
+    PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
+                                   MaxCudaThreads, "preserved_data", EntryBB);
+  } else {
+	  BinaryOperator *BlockSize = BinaryOperator::Create(
+		  Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
+	  BlockSize = BinaryOperator::Create(
+		  Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+	  PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
+	                                 BlockSize, "preserved_data", EntryBB);
   }
-  */
-
-
-  AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
-  // TODO Handle dynamic shared data
-  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
-
 
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
@@ -1184,15 +1168,27 @@ void FunctionTransformer::createDriverFunction() {
     BasicBlock *SwitchCaseBB = BasicBlock::Create(DriverF->getContext(), "switch_case", DriverF);
     Switch->addCase(CaseConst, SwitchCaseBB);
 
-    ThreadIdxLoop Loopx("threadIdx_x", BlockDimx, DriverF, this);
-    ThreadIdxLoop Loopy("threadIdx_y", BlockDimy, DriverF, this);
     ThreadIdxLoop Loopz("threadIdx_z", BlockDimz, DriverF, this);
-    Loopx.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
-    Loopy.hookUpBBs(Loopz.EntryBB, Loopz.EndBB);
+    ThreadIdxLoop Loopy("threadIdx_y", BlockDimy, DriverF, this);
+    ThreadIdxLoop Loopx("threadIdx_x", BlockDimx, DriverF, this);
+    Loopz.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
+    Loopy.hookUpBBs(Loopx.EntryBB, Loopx.EndBB);
 
     BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
-    ValueVector Args = {From, PreservedData, StaticSharedData, DynSharedData};
+    auto PreservedDataIdx = BinaryOperator::Create(
+      Instruction::BinaryOps::Mul, BlockDimy, Loopz.Idx, "threadPreservedDataIdx", SubkernelCallBB);
+    PreservedDataIdx = BinaryOperator::Create(
+      Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+    PreservedDataIdx = BinaryOperator::Create(
+	    Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+    PreservedDataIdx = BinaryOperator::Create(
+	    Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+
+    GetElementPtrInst *ThreadPreservedData = GetElementPtrInst::Create(
+	    CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
+
+    ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
     // original args + gridDim, blockIdx, blockDim
     for (auto &Arg : DriverF->args()) {
 	    Args.push_back(&Arg);
@@ -1208,10 +1204,10 @@ void FunctionTransformer::createDriverFunction() {
     new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
     // TODO inline those CallInsts
 
-    Loopz.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
+    Loopx.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
 
-    BranchInst::Create(Loopx.EntryBB, SwitchCaseBB);
-    BranchInst::Create(WhileEntryBB, Loopx.EndBB);
+    BranchInst::Create(Loopz.EntryBB, SwitchCaseBB);
+    BranchInst::Create(WhileEntryBB, Loopz.EndBB);
   }
 
   ReturnInst::Create(M->getContext(), WhileEndBB);
