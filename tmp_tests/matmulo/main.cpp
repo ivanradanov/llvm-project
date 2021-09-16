@@ -4,11 +4,11 @@
 #include <chrono>
 #include <assert.h>
 #include <stdlib.h>
-
-#define NITERATIONS 1
-#define BLOCK_SIZE 32
+#include <cstdlib>
 
 #include "__cpucuda_internal_header.h"
+
+int NITERATIONS = 1;
 
 #ifndef BLOCK_SIZE
 #define BLOCK_SIZE 32
@@ -24,7 +24,7 @@ __global__ void mat_mul(float *A, float *B, float *C, int size_x, int size_y)
 
 	int numBlocks = size_x / BLOCK_SIZE;
 
-	float res;
+	float res = 0;
 
 	for (int i = 0; i < numBlocks; a += BLOCK_SIZE, b += BLOCK_SIZE * size_y, i++) {
 
@@ -38,11 +38,13 @@ __global__ void mat_mul(float *A, float *B, float *C, int size_x, int size_y)
 
 		__syncthreads();
 
+
 #pragma unroll
 		for (int j = 0; j < BLOCK_SIZE; j++) {
 			res += sa[threadIdx.y][j] * sb[j][threadIdx.x];
 		}
 		__syncthreads();
+
 	}
 	c[threadIdx.x + threadIdx.y * size_y] = res;
 }
@@ -161,7 +163,7 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
   __cpucuda_global_blockDim = block;
 
   for (int i = 0; i < NITERATIONS; ++i) {
-//#pragma omp parallel for collapse(3)
+#pragma omp parallel for collapse(3)
     for(size_t g_x = 0; g_x < grid.x; ++g_x){
       for(size_t g_y = 0; g_y < grid.y; ++g_y){
         for(size_t g_z = 0; g_z < grid.z; ++g_z){
@@ -176,44 +178,76 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
   auto end = std::chrono::high_resolution_clock::now();
 
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "ms" <<std::endl;
+  using namespace std::literals;
+  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "µs ≈ "
+            << (end - start) / 1ms << "ms ≈ "
+            << (end - start) / 1s << "s.\n";
+
+  double matrix_flops = 2.0 * (double) dimsA.x * (double) dimsA.y * (double) dimsB.x;
+  double gflops = (NITERATIONS * matrix_flops / (double) 1000000000.0)  / ((end - start).count() / (double) 1000000.0);
+
+  std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
 
   std::cout << "Running verification..." << std::endl;
 
   float *C2 = (float *) aligned_malloc(default_alignment, sizeof(float) * dimsC.x * dimsC.y);
 
   assert(dimsB.y == dimsA.x);
+
+  start = std::chrono::high_resolution_clock::now();
   cpu_mat_mul(A, B, C2, dimsA.y, dimsB.x, dimsA.x);
+  end = std::chrono::high_resolution_clock::now();
 
-  /*
-  std::cout << "A" << std::endl;
-  print_mat(A, dimsA.x, dimsA.y);
-  std::cout << "B" << std::endl;
-  print_mat(B, dimsB.x, dimsB.y);
-  */
-  std::cout << "C" << std::endl;
-  print_mat(C, dimsC.x, dimsC.y);
-  /*
-  std::cout << "C2" << std::endl;
-  print_mat(C2, dimsC.x, dimsC.y);
-  */
+  duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+  using namespace std::literals;
+  std::cout << "Verification mat mul completed in  " << duration.count() << "µs ≈ "
+            << (end - start) / 1ms << "ms ≈ "
+            << (end - start) / 1s << "s.\n";
 
-  if (array_equal(C, C2, dimsC.x * dimsC.y))
+  auto success = array_equal(C, C2, dimsC.x * dimsC.y);
+
+  if (success)
 	  std::cout << "PASS" << std::endl;
   else
     std::cout << "FAILED" << std::endl;
+
+  /*
+    std::cout << "A" << std::endl;
+    print_mat(A, dimsA.x, dimsA.y);
+    std::cout << "B" << std::endl;
+    print_mat(B, dimsB.x, dimsB.y);
+    std::cout << "C" << std::endl;
+    print_mat(C, dimsC.x, dimsC.y);
+    std::cout << "C2" << std::endl;
+    print_mat(C2, dimsC.x, dimsC.y);
+  */
+
 
 }
 
 int main(int argc, char **argv) {
 
+	if (argc != 1 && argc != 5) {
+		std::cout << "Usage: ./a.out <m> <n> <k> <n_iters>" << std::endl;
+		return 1;
+	}
+	int m, n, k;
+	if (argc == 5) {
+    int i = 1;
+    m = atoi(argv[i++]);
+    n = atoi(argv[i++]);
+    k = atoi(argv[i++]);
+    NITERATIONS = atoi(argv[i++]);
+	} else {
+		m = 2;
+		n = 3;
+		k = 4;
+	}
 
 	int block_size = BLOCK_SIZE;
 
-	//dim3 dimsA(5 * 2 * block_size, 5 * 2 * block_size, 1);
-	//dim3 dimsB(5 * 4 * block_size, 5 * 2 * block_size, 1);
-	dim3 dimsA(block_size, block_size, 1);
-	dim3 dimsB(block_size, block_size, 1);
+	dim3 dimsA(k * block_size, m * block_size, 1);
+	dim3 dimsB(n * block_size, k * block_size, 1);
 
 	run(block_size, dimsA, dimsB);
 
