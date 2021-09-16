@@ -548,6 +548,7 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
       continue;
     UsedValVars _usedVals = findUsedVals(SK, Succ, definedVals, visited);
     usedVals.usedVals.insert(_usedVals.usedVals.begin(), _usedVals.usedVals.end());
+    usedVals.usedSharedVars.insert(_usedVals.usedSharedVars.begin(), _usedVals.usedSharedVars.end());
   }
 
   return usedVals;
