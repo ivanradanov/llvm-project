@@ -96,6 +96,7 @@ public:
   map<SubkernelIdType, map<SubkernelIdType, InstVector>> SubkernelUsedSharedVars;
   map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
   map<BBIdType, BasicBlock *> OriginalFunBBs;
+  SubkernelIdType EntrySubkernel;
 
   map<SubkernelIdType, map<Value *, int>> IndexInCombinedDataType;
   map<SubkernelIdType, ValueVector> CombinedUsedVals;
@@ -114,6 +115,7 @@ public:
   IntegerType *LLVMSubkernelIdType;
   StructType *SubkernelReturnType;
   IntegerType *GepIndexType;
+  IntegerType *I32Type;
   IntegerType *Dim3FieldType;
   Type *Dim3Type;
 
@@ -132,7 +134,7 @@ public:
   TypeVector getSubkernelParams(SubkernelIdType SK);
   vector<StringRef> getSubkernelParamNames(SubkernelIdType SK);
   void transformSubkernels(SubkernelIdType SK);
-  void findSubkernelBBs(Function &F);
+  void findSubkernelBBs();
   void findSharedVars();
   void createSubkernels();
   Type *getCombinedDataType();
@@ -406,9 +408,13 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
 
 };
 
-void FunctionTransformer::findSubkernelBBs(Function &F) {
+void FunctionTransformer::findSubkernelBBs() {
   std::set<BasicBlock *> visited;
-  _findSubkernelBBs(&F.getEntryBlock(), visited);
+  _findSubkernelBBs(&F->getEntryBlock(), visited);
+
+  for (auto SK : SubkernelIds)
+    if (&F->getEntryBlock() == SubkernelBBs[SK][0])
+      EntrySubkernel = SK;
 }
 
 void FunctionTransformer::_findSubkernelBBs(BasicBlock *BB, BBSet &visited) {
@@ -995,7 +1001,7 @@ void FunctionTransformer::replaceDim3Usages() {
 void FunctionTransformer::createSubkernels() {
   replaceDim3Usages();
   splitBlocksAroundBarriers(*F);
-  findSubkernelBBs(*F);
+  findSubkernelBBs();
   createSubkernelFunctionClones();
   assignBBIds();
   findSharedVars();
@@ -1183,10 +1189,11 @@ void FunctionTransformer::createDriverFunction() {
   SubkernelRetFromPtr->setName("from_ptr");
   new StoreInst(mOne, SubkernelRetFromPtr, EntryBB);
 
+  ConstantInt *EntrySKConst = ConstantInt::get(I32Type, EntrySubkernel);
   GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
     SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
-  new StoreInst(Zero, SubkernelRetNextPtr, EntryBB);
+  new StoreInst(EntrySKConst, SubkernelRetNextPtr, EntryBB);
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
   BranchInst::Create(WhileEntryBB, EntryBB);
@@ -1392,6 +1399,7 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   LLVMBBIdType = IntegerType::getInt32Ty(M->getContext());
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
   GepIndexType = IntegerType::getInt32Ty(M->getContext());
+  I32Type = IntegerType::getInt32Ty(M->getContext());
   Dim3FieldType = IntegerType::getInt32Ty(M->getContext());
   getDim3Fs();
   Dim3Type = getDim3StructType();
