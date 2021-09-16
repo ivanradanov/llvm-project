@@ -950,6 +950,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (FD && FD->hasAttr<CPUCUDAGlobalAttr>()) {
 	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
 	  Fn->addFnAttr(llvm::Attribute::NoRecurse);
+	  Fn->addFnAttr(llvm::Attribute::NoInline);
   }
 
   if (FD) {
