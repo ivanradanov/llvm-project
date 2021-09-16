@@ -713,6 +713,17 @@ void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
   }
 }
 
+// TODO TEMP implementation - do proper domination analysis - would be best if
+// we can use DominatorTree
+bool dominates(Value *ValD, Instruction *User) {
+	auto Def = dyn_cast<Instruction>(ValD);
+	if (!Def)
+		return false;
+	if (Def->getParent() == User->getParent())
+		return Def->comesBefore(User);
+	return false;
+}
+
 // TODO optimise when usedVals gets populated by simple struct member accesses,
 // for example, currently accesses of dim3 members get added to usedVals
 void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
@@ -811,8 +822,8 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
           getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
-        // If the used val is in the same subkernel replace only if the use is
-        // not already dominated by Val - this happens when a subkernel starts
+        // If the used val is in the same subkernel replace only if the val does
+        // not already dominate the use - this happens when a subkernel starts
         // execution after a barrier and a value is passed back to an earlier BB
         // using a PHI node
         if (in_vector(SubkernelBBs[SK], dyn_cast<Instruction>(Val)->getParent()))
