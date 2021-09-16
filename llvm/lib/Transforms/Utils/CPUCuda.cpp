@@ -56,6 +56,7 @@ const vector<std::string> Dim3Names = {
 
 struct UsedValVars {
   ValueSet usedVals;
+	ValueSet definedLater;
   InstSet usedSharedVars;
 };
 
@@ -311,38 +312,6 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
                                                  /* isSigned */ true);
     Constant *ReturnVal = ConstantStruct::get(Pass->getSubkernelsReturnType(), {FromLabel, ContLabel});
 
-    Value *DataStructPtr = F->getArg(1);
-
-    ConstantInt *Zero = ConstantInt::get(Pass->GepIndexType, 0);
-
-    for (auto &Val : Pass->CombinedUsedVals[SK]) {
-      Instruction *Inst = dyn_cast<Instruction>(Val);
-      if (!Inst) {
-        // TODO in the case when the val is an argument to the function, we must
-        // insert it into the data param prior to the first call to a subkernel
-        assert(dyn_cast<Argument>(Val) && "Values in CombinedUsedVals must be instructions or arguments");
-        continue;
-      }
-      BasicBlock *ValBB = Inst->getParent();
-      // We are only interested in values which are defined in the current
-      // subkernel
-      if (!in_vector(Pass->SubkernelBBs[SK], ValBB))
-        continue;
-
-      ConstantInt *Index = ConstantInt::get(
-        Pass->GepIndexType, Pass->getValIndexInCombinedDataType(SK, Val));
-      Instruction *NextInst = Inst->getNextNonDebugInstruction();
-      // If next inst is Phi, we have to get the first following non-phi
-      // instruction because all Phi's must be bunched at the start of a BB
-      if (dyn_cast<PHINode>(NextInst)) {
-        NextInst = NextInst->getParent()->getFirstNonPHI();
-      }
-      GetElementPtrInst *Gep = GetElementPtrInst::Create(
-        Pass->getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
-      assert(NextInst && "The Inst must not be a terminator instruction so a next instruction has to exist");
-      new StoreInst(Val, Gep, NextInst);
-    }
-
     ReturnInst::Create(C, ReturnVal, NewBB);
 
     return NewBB;
@@ -533,6 +502,8 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
   // Find all values which were not yet defined but are used
   for (auto &I : *BB) {
     definedVals.insert(&I);
+    if (in_set(usedVals.usedVals, static_cast<Value *>(&I)))
+	    usedVals.definedLater.insert(&I);
     for (Use &U : I.operands()) {
       Value *v = U.get();
       // TODO is that all the cases?
@@ -555,6 +526,7 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
     UsedValVars _usedVals = findUsedVals(SK, Succ, definedVals, visited);
     usedVals.usedVals.insert(_usedVals.usedVals.begin(), _usedVals.usedVals.end());
     usedVals.usedSharedVars.insert(_usedVals.usedSharedVars.begin(), _usedVals.usedSharedVars.end());
+    usedVals.definedLater.insert(_usedVals.definedLater.begin(), _usedVals.definedLater.end());
   }
 
   return usedVals;
@@ -790,6 +762,36 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     transformer.visit(term);
   }
 
+  // Store the used vals for later subkernels
+  {
+	  Value *DataStructPtr = nf->getArg(1);
+
+    ConstantInt *Zero = ConstantInt::get(I32Type, 0);
+
+    for (auto &Val : CombinedUsedVals[SK]) {
+      Instruction *Inst = dyn_cast<Instruction>(Val);
+      BasicBlock *ValBB = Inst->getParent();
+      // We are only interested in values which are defined in the current
+      // subkernel
+      if (!in_vector(SubkernelBBs[SK], ValBB))
+        continue;
+
+      ConstantInt *Index = ConstantInt::get(
+        I32Type, getValIndexInCombinedDataType(SK, Val));
+      Instruction *NextInst = Inst->getNextNonDebugInstruction();
+      // If next inst is Phi, we have to get the first following non-phi
+      // instruction because all Phi's must be bunched at the start of a BB
+      if (dyn_cast<PHINode>(NextInst)) {
+        NextInst = NextInst->getParent()->getFirstNonPHI();
+      }
+      GetElementPtrInst *Gep = GetElementPtrInst::Create(
+        getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
+      assert(NextInst && "The Inst must not be a terminator instruction so a next instruction has to exist");
+      new StoreInst(Val, Gep, NextInst);
+    }
+
+  }
+
   // Construct the entry block which sets up the usedVals params and handles phi
   // instructions
   {
@@ -809,7 +811,17 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
           getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
-        Val->replaceAllUsesWith(UnpackedVal);
+        // If the used val is in the same subkernel replace only if the use is
+        // not already dominated by Val - this happens when a subkernel starts
+        // execution after a barrier and a value is passed back to an earlier BB
+        // using a PHI node
+        if (in_vector(SubkernelBBs[SK], dyn_cast<Instruction>(Val)->getParent()))
+          Val->replaceUsesWithIf(UnpackedVal, [&](Use &U) {
+            Instruction *I = dyn_cast<Instruction>(U.getUser());
+            return !dominates(Val, I);
+          });
+        else
+	        Val->replaceAllUsesWith(UnpackedVal);
         UnpackedVal->takeName(Val);
       }
       // The index at which the original arguments start
@@ -892,8 +904,6 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     for (auto MD : MDs)
       nf->addMetadata(MD.first, *MD.second);
   }
-  // At this point, the unused basic blocks in nf might still use the
-  // arguments of _nf so we cannot delete it yet
 
   // Erase unneeded basic blocks
   {
