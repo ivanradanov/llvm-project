@@ -62,6 +62,7 @@ struct UsedValVars {
 class FunctionTransformer {
 public:
   struct {
+    bool MallocPreservedDataArray = true;
     bool DynamicPreservedDataArray = false;
     bool InlineSubkernels = false;
     // Actually they always have to be inlined because otherwise we would get
@@ -1073,6 +1074,7 @@ ValueVector FunctionTransformer::convertDim3ToArgs(Value *D, Instruction *After)
         }
       auto *NI = I->clone();
       NI->insertAfter(After);
+      After = NI;
       NI->setName(I->getName());
       VMap[I] = NI;
       RemapInstruction(NI, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
@@ -1128,6 +1130,7 @@ void FunctionTransformer::createDriverFunction() {
 
   BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
 
+  // TODO do we need to make this heap-allocated as well
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
   // TODO Handle dynamic shared data
   UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
@@ -1146,8 +1149,20 @@ void FunctionTransformer::createDriverFunction() {
     "blockDim_z", EntryBB);
   Dim3Calls.push_back(BlockDimz);
 
-  AllocaInst *PreservedData;
-  if (!Options.DynamicPreservedDataArray) {
+  Instruction *PreservedData;
+  if (Options.MallocPreservedDataArray) {
+    DataLayout *DL = new DataLayout(M);
+    ConstantInt *StructSize = ConstantInt::get(GepIndexType, DL->getTypeAllocSize(CombinedDataType));
+    ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
+    Constant *MallocSize = ConstantExpr::getMul(StructSize, MaxCudaThreads);
+    Instruction *Malloc = CallInst::CreateMalloc(
+      static_cast<Instruction *>(StaticSharedData),
+      IntegerType::getInt32Ty(M->getContext()),
+      CombinedDataType,
+      //IntegerType::getInt32Ty(M->getContext()),
+      MallocSize, nullptr, nullptr, "preserved_data");
+    PreservedData = Malloc;
+  } else if (!Options.DynamicPreservedDataArray) {
     ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
     PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
                                    MaxCudaThreads, "preserved_data", EntryBB);
@@ -1349,9 +1364,13 @@ void FunctionTransformer::createWrapperFunction() {
 
   ReturnInst::Create(M->getContext(), EntryBB);
 
-  InlineFunctionInfo IFI;
-  InlineResult IR = InlineFunction(*DriverCall, IFI);
-  assert(IR.isSuccess());
+  // TODO This stopped working when preserveddata is malloced for some reason, investigate
+  // opt: /scr0/ivan/src/llvm-project/llvm/lib/Transforms/Utils/ValueMapper.cpp:904: void {anonymous}::Mapper::remapInstruction(llvm::Instruction*): Assertion `(Flags & RF_IgnoreMissingLocals) && "Referenced value not in value map!"' failed.
+  /*
+    InlineFunctionInfo IFI;
+    InlineResult IR = InlineFunction(*DriverCall, IFI);
+    assert(IR.isSuccess());
+  */
 
   replaceFunctionUsages(M, OriginalF, WrapperF);
 
