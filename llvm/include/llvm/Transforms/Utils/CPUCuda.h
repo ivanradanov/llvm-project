@@ -21,6 +21,7 @@ namespace llvm {
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
 
 	public:
+		void cleanup(Module *M);
 		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
 
 	};

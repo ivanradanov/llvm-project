@@ -62,8 +62,8 @@ struct UsedValVars {
 class FunctionTransformer {
 public:
   struct {
-    bool DynamicPreservedDataArray = true;
-    bool InlineSubkernels = true;
+    bool DynamicPreservedDataArray = false;
+    bool InlineSubkernels = false;
     // Actually they always have to be inlined because otherwise we would get
     // undefined references when linking, so not really an option currently
     bool InlineDim3Fs = true;
@@ -699,7 +699,7 @@ TypeVector FunctionTransformer::getSubkernelParams(SubkernelIdType SK) {
   params.push_back(PointerType::get(SharedVarsDataType, SubkernelFs[SK]->getAddressSpace()));
   // Pointer to the dynamically allocated shared memory TODO actually implement
   // it
-  params.push_back(PointerType::get(M->getContext(), SubkernelFs[SK]->getAddressSpace()));
+  params.push_back(PointerType::get(IntegerType::getInt8Ty(M->getContext()), SubkernelFs[SK]->getAddressSpace()));
 
   // The original arguments
   for (auto &Arg : F->args()) {
@@ -1130,7 +1130,7 @@ void FunctionTransformer::createDriverFunction() {
 
   AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
   // TODO Handle dynamic shared data
-  UndefValue *DynSharedData = UndefValue::get(PointerType::get(M->getContext(), DriverF->getAddressSpace()));
+  UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
 
   ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, StaticSharedData);
   CallInst *BlockDimx = CallInst::Create(
@@ -1294,12 +1294,19 @@ void FunctionTransformer::getDim3Fs() {
   assignToIfContains(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
   assignToIfContains(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
   assignToIfContains(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
+}
 
-  // This function exists only to make sure the above _real_ functions get
-  // included in the llvm module - find out how to do this properly TODO
-  Function *User;
-  assignToIfContains(M, User, "__cpucuda_real_func_user");
-  User->eraseFromParent();
+void replaceFunctionUsages(Module *M, Function *Old, Function *New) {
+  for (auto &F : *M) {
+    for (auto &BB : F) {
+      for (auto &I : BB) {
+        if (auto Call = dyn_cast<CallBase>(&I)) {
+          if (Call->getCalledFunction() == Old)
+            Call->setCalledFunction(New);
+        }
+      }
+    }
+  }
 }
 
 void FunctionTransformer::createWrapperFunction() {
@@ -1345,15 +1352,17 @@ void FunctionTransformer::createWrapperFunction() {
   InlineFunctionInfo IFI;
   InlineResult IR = InlineFunction(*DriverCall, IFI);
   assert(IR.isSuccess());
-}
 
-void FunctionTransformer::cleanupFunctions() {
+  replaceFunctionUsages(M, OriginalF, WrapperF);
+
   std::string NewName = std::string(OriginalF->getName()) + "_original";
   WrapperF->takeName(OriginalF);
   OriginalF->setName(NewName);
 
+}
+
+void FunctionTransformer::cleanupFunctions() {
   OriginalF->eraseFromParent();
-  Dim3Fs.Dim3ToArg->eraseFromParent();
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
@@ -1375,6 +1384,18 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
 
   cleanupFunctions();
 
+}
+
+
+void CPUCudaPass::cleanup(Module *M) {
+  // This function exists only to make sure the above _real_ functions get
+  // included in the llvm module - find out how to do this properly TODO
+  Function *User;
+  assignToIfContains(M, User, "__cpucuda_real_func_user");
+  User->eraseFromParent();
+  assignToIfContains(M, User, "__cpucuda_dim3_to_arg");
+  User->eraseFromParent();
+  // TODO do we need to cleanup other stuff?
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
@@ -1400,7 +1421,8 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
   }
 
-  // TODO cleanup dim3 helper functions
+
+  cleanup(&M);
 
   // TODO optimise the preserved sets, although preserving anything seems
   // unlikely
