@@ -15,4 +15,4 @@ $CCX -I../../build-clang/projects/openmp/runtime/src/ -I.. -fopenmp=libomp -Wall
 
 ../../build/bin/opt -O3 main.cpu.ll -o main.cpu.opt.ll
 ../../build/bin/llc -O3 main.cpu.opt.ll -o main.cpu.opt.s
-$CCX -fopenmp=libomp -Wall -g -O3 main.cpu.opt.s -o matmul
+$CCX -fopenmp=libomp -Wall -g -O3 main.cpu.opt.s -o vecadd

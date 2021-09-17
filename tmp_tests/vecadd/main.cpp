@@ -95,6 +95,24 @@ void run(int block_size, int size) {
   dim3 grid((size + block_size - 1) / block_size);
   dim3 block(block_size);
 
+  // warmup
+  {
+    __cpucuda_global_gridDim = grid;
+    __cpucuda_global_blockDim = block;
+
+    for (int i = 0; i < NITERATIONS; ++i) {
+#pragma omp parallel for collapse(3)
+      for(size_t g_x = 0; g_x < grid.x; ++g_x){
+        for(size_t g_y = 0; g_y < grid.y; ++g_y){
+          for(size_t g_z = 0; g_z < grid.z; ++g_z){
+            dim3 block_index(g_x, g_y, g_z);
+            __cpucuda_global_blockIdx = block_index;
+            vec_add(A, B, C, size);
+          }
+        }
+      }
+	  }
+  }
   __cpucuda_global_gridDim = grid;
   __cpucuda_global_blockDim = block;
 
@@ -124,6 +142,15 @@ void run(int block_size, int size) {
 	  (duration.count() / (double) 1000.0 * 1000.0);
 
   std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
+
+  std::cout
+	  << omp_get_max_threads() << ", "
+	  << size << ", "
+	  << NITERATIONS << ", "
+	  << ms << ", "
+	  << gflops << ", "
+	  << std::endl
+	  << std::endl;
 
 
   std::cout << "Running verification..." << std::endl;

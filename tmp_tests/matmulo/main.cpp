@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <cstdlib>
+#include <omp.h>
 
 #include "__cpucuda_internal_header.h"
 
@@ -157,6 +158,26 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
   print_mat(C, dimsC.x, dimsC.y);
   */
 
+
+  // warmup
+  {
+    __cpucuda_global_gridDim = grid;
+    __cpucuda_global_blockDim = block;
+
+    for (int i = 0; i < NITERATIONS; ++i) {
+#pragma omp parallel for collapse(3)
+      for(size_t g_x = 0; g_x < grid.x; ++g_x){
+        for(size_t g_y = 0; g_y < grid.y; ++g_y){
+          for(size_t g_z = 0; g_z < grid.z; ++g_z){
+            dim3 block_index(g_x, g_y, g_z);
+            __cpucuda_global_blockIdx = block_index;
+            mat_mul(A, B, C, dimsA.x, dimsB.x);
+          }
+        }
+      }
+	  }
+  }
+
   auto start = std::chrono::high_resolution_clock::now();
 
   __cpucuda_global_gridDim = grid;
@@ -183,10 +204,24 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
             << (end - start) / 1ms << "ms ≈ "
             << (end - start) / 1s << "s.\n";
 
+  auto ms = (end - start) / 1ms;
+
   double matrix_flops = 2.0 * (double) dimsA.x * (double) dimsA.y * (double) dimsB.x;
   double gflops = (NITERATIONS * matrix_flops / (double) 1000000000.0)  / ((end - start).count() / (double) 1000000.0);
 
   std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
+
+  std::cout
+	  << omp_get_max_threads() << ", "
+	  << dimsA.y << ", "
+	  << dimsB.x << ", "
+	  << dimsA.x << ", "
+	  << NITERATIONS << ", "
+	  << ms << ", "
+	  << gflops << ", "
+	  << std::endl
+    << std::endl;
+
 
   std::cout << "Running verification..." << std::endl;
 
@@ -204,12 +239,14 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
             << (end - start) / 1ms << "ms ≈ "
             << (end - start) / 1s << "s.\n";
 
+
   auto success = array_equal(C, C2, dimsC.x * dimsC.y);
 
   if (success)
 	  std::cout << "PASS" << std::endl;
   else
     std::cout << "FAILED" << std::endl;
+
 
   /*
     std::cout << "A" << std::endl;
