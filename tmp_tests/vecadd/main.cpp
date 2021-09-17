@@ -4,6 +4,7 @@
 #include <chrono>
 #include <assert.h>
 #include <stdlib.h>
+#include <omp.h>
 
 int NITERATIONS = 1;
 
@@ -131,15 +132,15 @@ void run(int block_size, int size) {
 
   auto end = std::chrono::high_resolution_clock::now();
 
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
   using namespace std::literals;
-  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "µs ≈ "
-            << (end - start) / 1ms << "ms ≈ "
-            << (end - start) / 1s << "s.\n";
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  double ms = us / 1000.0;
+  double s = ms / 1000.0;
+  std::cout << "Executed " << NITERATIONS << " iterations in " << us << "µs ≈ " << ms << "ms ≈ " << s << "s.\n";
 
-  double vec_add_flops = size;
-  double gflops = (NITERATIONS * vec_add_flops / (double) (1000.0 * 1000.0 * 1000.0)) /
-	  (duration.count() / (double) 1000.0 * 1000.0);
+  double matrix_flops = size;
+  double giga = (double) 1000.0 * 1000.0 * 1000.0;
+  double gflops = (NITERATIONS * matrix_flops / giga)  / s;
 
   std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
 
@@ -157,13 +158,14 @@ void run(int block_size, int size) {
 
   float *C2 = (float *) aligned_malloc(default_alignment, sizeof(float) * size);
 
+  start = std::chrono::high_resolution_clock::now();
   cpu_vec_add(A, B, C2, size);
-  /*
-  std::cout << "C" << std::endl;
-  print_vec(C, size);
-  std::cout << "C2" << std::endl;
-  print_vec(C2, size);
-  */
+  end = std::chrono::high_resolution_clock::now();
+
+  us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  ms = us / 1000.0;
+  s = ms / 1000.0;
+  std::cout << "Verification vec add completed in  " << us << "µs ≈ " << ms << "ms ≈ " << s << "s.\n";
 
   if (array_equal(C, C2, size))
 	  std::cout << "PASS" << std::endl;

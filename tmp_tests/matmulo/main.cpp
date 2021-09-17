@@ -147,17 +147,7 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
 	dim3 block(block_size, block_size);
   dim3 grid(dimsB.x / block.x, dimsA.y / block.y);
 
-  std::cout << "Executing kernel" << std::endl;
-
-  /*
-  std::cout << "A" << std::endl;
-  print_mat(A, dimsA.x, dimsA.y);
-  std::cout << "B" << std::endl;
-  print_mat(B, dimsB.x, dimsB.y);
-  std::cout << "C" << std::endl;
-  print_mat(C, dimsC.x, dimsC.y);
-  */
-
+  std::cout << "Executing warmup" << std::endl;
 
   // warmup
   {
@@ -177,6 +167,8 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
       }
 	  }
   }
+
+  std::cout << "Executing kernel" << std::endl;
 
   auto start = std::chrono::high_resolution_clock::now();
 
@@ -198,16 +190,16 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
 
   auto end = std::chrono::high_resolution_clock::now();
 
-  auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
   using namespace std::literals;
-  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "µs ≈ "
-            << (end - start) / 1ms << "ms ≈ "
-            << (end - start) / 1s << "s.\n";
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  double ms = us / 1000.0;
+  double s = ms / 1000.0;
+  std::cout << "Executed " << NITERATIONS << " iterations in " << us << "µs ≈ " << ms << "ms ≈ " << s << "s.\n";
 
-  auto ms = (end - start) / 1ms;
 
   double matrix_flops = 2.0 * (double) dimsA.x * (double) dimsA.y * (double) dimsB.x;
-  double gflops = (NITERATIONS * matrix_flops / (double) 1000000000.0)  / ((end - start).count() / (double) 1000000.0);
+  double giga = (double) 1000.0 * 1000.0 * 1000.0;
+  double gflops = (NITERATIONS * matrix_flops / giga)  / s;
 
   std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
 
@@ -233,12 +225,10 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
   cpu_mat_mul(A, B, C2, dimsA.y, dimsB.x, dimsA.x);
   end = std::chrono::high_resolution_clock::now();
 
-  duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  using namespace std::literals;
-  std::cout << "Verification mat mul completed in  " << duration.count() << "µs ≈ "
-            << (end - start) / 1ms << "ms ≈ "
-            << (end - start) / 1s << "s.\n";
-
+  us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+  ms = us / 1000.0;
+  s = ms / 1000.0;
+  std::cout << "Verification mat mul completed in  " << us << "µs ≈ " << ms << "ms ≈ " << s << "s.\n";
 
   auto success = array_equal(C, C2, dimsC.x * dimsC.y);
 
@@ -262,11 +252,13 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
 
 }
 
+void test_cpu_mat_mul();
+
 int main(int argc, char **argv) {
 
 	int block_size = BLOCK_SIZE;
 
-	if (argc != 1 && argc != 5) {
+	if (argc != 1 && argc != 5 && argc != 2) {
 		std::cout << "Usage: ./a.out <m> <n> <k> <n_iters>" << std::endl;
 		return 1;
 	}
@@ -285,10 +277,53 @@ int main(int argc, char **argv) {
 		n = 3 * block_size;
 		k = 4 * block_size;
 	}
+	if (argc == 2) {
+		test_cpu_mat_mul();
+		return 1;
+	}
 
 	dim3 dimsA(k, m, 1);
 	dim3 dimsB(n, k, 1);
 
 	run(block_size, dimsA, dimsB);
+	return 0;
 
+}
+
+void test_cpu_mat_mul() {
+	float *A = (float *) aligned_malloc(default_alignment, sizeof(float) * 1000);
+	float *B = (float *) aligned_malloc(default_alignment, sizeof(float) * 1000);
+	float *C = (float *) aligned_malloc(default_alignment, sizeof(float) * 1000);
+	int i = 0;
+	A[i++] = 1;
+	A[i++] = 2;
+	A[i++] = 3;
+	A[i++] = 4;
+	A[i++] = 5;
+	A[i++] = 6;
+	A[i++] = 4;
+	A[i++] = 5;
+	A[i++] = 6;
+	A[i++] = 4;
+	A[i++] = 5;
+	A[i++] = 6;
+
+	i = 0;
+	B[i++] = 7;
+	B[i++] = 8;
+	B[i++] = 9;
+	B[i++] = 10;
+	B[i++] = 11;
+	B[i++] = 12;
+
+	cpu_mat_mul(A, B, C, 4, 2, 3);
+
+	std::cout << "A" << std::endl;
+	print_mat(A, 4, 3);
+	std::cout << "B" << std::endl;
+	print_mat(B, 3, 2);
+	std::cout << "C" << std::endl;
+	print_mat(C, 4, 2);
+
+	return;
 }
