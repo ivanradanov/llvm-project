@@ -10,7 +10,9 @@ int NITERATIONS = 1;
 
 #include "__cpucuda_internal_header.h"
 
-__global__ void vec_add(float *A, float *B, float *C, int size)
+#define STREAM_TYPE double
+
+__global__ void vec_add(STREAM_TYPE *A, STREAM_TYPE *B, STREAM_TYPE *C, int size)
 {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	if (i < size)
@@ -52,12 +54,12 @@ inline void* aligned_malloc(size_t align, size_t size)
 	return result;
 }
 
-void populate_array(float *a, int size) {
+void populate_array(STREAM_TYPE *a, int size) {
 	for (int i = 0; i < size; ++i)
-		a[i] = static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+		a[i] = static_cast <STREAM_TYPE> (rand()) / static_cast <STREAM_TYPE> (RAND_MAX);
 }
 
-bool array_equal(float *a, float *b, int size) {
+bool array_equal(STREAM_TYPE *a, STREAM_TYPE *b, int size) {
 	double e = 1.e-6;  // epsilon
 	for (int i = 0; i < size; ++i)
 		if (fabs(a[i] - b[i]) > e)
@@ -65,12 +67,12 @@ bool array_equal(float *a, float *b, int size) {
 	return true;
 }
 
-void cpu_vec_add(float *A, float *B, float *C, int size) {
+void cpu_vec_add(STREAM_TYPE *A, STREAM_TYPE *B, STREAM_TYPE *C, int size) {
   for (int m = 0; m < size; m++)
 	  C[m] = A[m] + B[m];
 }
 
-void print_vec(float *A, int size) {
+void print_vec(STREAM_TYPE *A, int size) {
 	for (int m = 0; m < size; m++)
 		std::cout << std::fixed << std::setprecision(2) << A[m] << " ";
 	std::cout << std::endl;
@@ -80,14 +82,14 @@ void run(int block_size, int size) {
 
 	std::cout << "size " << size << std::endl;
 
-	float *A = (float *) aligned_malloc(default_alignment, sizeof(float) * size);
-	float *B = (float *) aligned_malloc(default_alignment, sizeof(float) * size);
+	STREAM_TYPE *A = (STREAM_TYPE *) aligned_malloc(default_alignment, sizeof(STREAM_TYPE) * size);
+	STREAM_TYPE *B = (STREAM_TYPE *) aligned_malloc(default_alignment, sizeof(STREAM_TYPE) * size);
 
-	// Random floats 0.0 - 1.0
+	// Random STREAM_TYPEs 0.0 - 1.0
 	populate_array(A, size);
 	populate_array(B, size);
 
-	float *C = (float *) aligned_malloc(default_alignment, sizeof(float) * size);
+	STREAM_TYPE *C = (STREAM_TYPE *) aligned_malloc(default_alignment, sizeof(STREAM_TYPE) * size);
 
   std::cout << "Executing kernel" << std::endl;
 
@@ -156,7 +158,7 @@ void run(int block_size, int size) {
 
   std::cout << "Running verification..." << std::endl;
 
-  float *C2 = (float *) aligned_malloc(default_alignment, sizeof(float) * size);
+  STREAM_TYPE *C2 = (STREAM_TYPE *) aligned_malloc(default_alignment, sizeof(STREAM_TYPE) * size);
 
   start = std::chrono::high_resolution_clock::now();
   cpu_vec_add(A, B, C2, size);
