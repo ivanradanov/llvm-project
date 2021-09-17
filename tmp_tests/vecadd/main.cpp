@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <stdlib.h>
 
-#define NITERATIONS 1
+int NITERATIONS = 1;
 
 #include "__cpucuda_internal_header.h"
 
@@ -114,7 +114,17 @@ void run(int block_size, int size) {
   auto end = std::chrono::high_resolution_clock::now();
 
   auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "ms" <<std::endl;
+  using namespace std::literals;
+  std::cout << "Executed " << NITERATIONS << " iterations in " << duration.count() << "µs ≈ "
+            << (end - start) / 1ms << "ms ≈ "
+            << (end - start) / 1s << "s.\n";
+
+  double vec_add_flops = size;
+  double gflops = (NITERATIONS * vec_add_flops / (double) (1000.0 * 1000.0 * 1000.0)) /
+	  (duration.count() / (double) 1000.0 * 1000.0);
+
+  std::cout << "GFlop/s: " << gflops << std::endl << std::endl;
+
 
   std::cout << "Running verification..." << std::endl;
 
@@ -137,8 +147,21 @@ void run(int block_size, int size) {
 
 int main(int argc, char **argv) {
 
-	int block_size = 32;
+	int block_size = 512;
 
-	run(block_size, block_size * 100);
+	if (argc != 1 && argc != 3) {
+		std::cout << "Usage: ./a.out <size> <n_iters>" << std::endl;
+		return 1;
+	}
+	int size;
+	if (argc == 3) {
+		int i = 1;
+		size = atoi(argv[i++]);
+		NITERATIONS = atoi(argv[i++]);
+	} else {
+		size = 100;
+	}
+
+	run(block_size, size);
 
 }

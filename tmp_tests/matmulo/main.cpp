@@ -227,6 +227,8 @@ void run(int block_size, dim3 dimsA, dim3 dimsB) {
 
 int main(int argc, char **argv) {
 
+	int block_size = BLOCK_SIZE;
+
 	if (argc != 1 && argc != 5) {
 		std::cout << "Usage: ./a.out <m> <n> <k> <n_iters>" << std::endl;
 		return 1;
@@ -237,17 +239,18 @@ int main(int argc, char **argv) {
     m = atoi(argv[i++]);
     n = atoi(argv[i++]);
     k = atoi(argv[i++]);
+    assert(m % block_size == 0);
+    assert(n % block_size == 0);
+    assert(k % block_size == 0);
     NITERATIONS = atoi(argv[i++]);
 	} else {
-		m = 2;
-		n = 3;
-		k = 4;
+		m = 2 * block_size;
+		n = 3 * block_size;
+		k = 4 * block_size;
 	}
 
-	int block_size = BLOCK_SIZE;
-
-	dim3 dimsA(k * block_size, m * block_size, 1);
-	dim3 dimsB(n * block_size, k * block_size, 1);
+	dim3 dimsA(k, m, 1);
+	dim3 dimsB(n, k, 1);
 
 	run(block_size, dimsA, dimsB);
 
