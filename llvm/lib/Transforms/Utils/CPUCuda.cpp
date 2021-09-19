@@ -26,6 +26,13 @@ using namespace llvm;
 
 // TODO handle lifetimes if needed?
 
+// TODO integrate the hipCPU code
+
+// TODO automatically include the internal cpucuda header
+
+// TODO split the pass in two parts - before and after replacing the dim3 getter
+// calls with arguments, and optimise the code in between
+
 static const int MAX_CUDA_THREADS = 1024;
 
 using std::vector;
