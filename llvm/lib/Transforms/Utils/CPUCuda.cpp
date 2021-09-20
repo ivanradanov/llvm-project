@@ -625,16 +625,6 @@ set<SubkernelIdType> FunctionTransformer::getSubkernelSuccessors(SubkernelIdType
   return Successors;
 }
 
-// Deprecated
-/*Type *FunctionTransformer::getSubkernelReturnDataFieldType(SubkernelIdType FromSK, SubkernelIdType SuccSK) {
-  auto UsedVals = SubkernelUsedVals[FromSK][SuccSK];
-  vector<Type *> types;
-  for (auto Val : UsedVals) {
-  types.push_back(Val->getType());
-  }
-  return StructType::get(M->getContext(), ArrayRef<Type *>(types));
-  }*/
-
 Type *FunctionTransformer::getCombinedDataType() {
   return CombinedDataType;
 }
@@ -783,17 +773,6 @@ public:
   }
 
 };
-
-// TODO TEMP implementation - do proper domination analysis - would be best if
-// we can use DominatorTree
-bool dominates(Value *ValD, Instruction *User) {
-  auto Def = dyn_cast<Instruction>(ValD);
-  if (!Def)
-    return false;
-  if (Def->getParent() == User->getParent())
-    return Def->comesBefore(User);
-  return false;
-}
 
 // TODO optimise when usedVals gets populated by simple struct member accesses,
 // for example, currently accesses of dim3 members get added to usedVals
@@ -1017,7 +996,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
 void FunctionTransformer::findSharedVars() {
   // TODO find where variable Alloca's are getting optimised out and disable it
-  // for shared vars
+  // for shared vars (NOTE it is the mem2reg pass I believe)
   for (auto SK : SubkernelIds) {
     for (auto &BB : *SubkernelFs[SK]) {
       for (auto &I : BB) {
