@@ -70,7 +70,8 @@ struct UsedValVars {
 class FunctionTransformer {
 public:
   struct {
-    // Do we use a single or triple thread loop
+    // Do we use a single or triple thread loop NOTE turns out this reduces
+    // performance by about a factor of 2
     bool SingleDimThreadLoop = false;
     // Do we use malloc or alloca for the preserved data array - I think we
     // might actually overflow the stack with alloca so should be malloc
@@ -81,7 +82,7 @@ public:
     bool DynamicPreservedDataArray = false;
     // Manually inline the subkernels in the driver function - the optimisations
     // following this pass should do it anyways if it is deemed profitable
-    bool InlineSubkernels = false;
+    bool InlineSubkernels = true;
     // Actually they always have to be inlined because otherwise we would get
     // undefined references when linking, so not really an option currently
     bool InlineDim3Fs = true;
@@ -1274,17 +1275,14 @@ void FunctionTransformer::createDriverFunction() {
         SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
         Args, "local_ret", SubkernelCallBB);
       new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
-      // TODO inline those CallInsts
-      if (Options.InlineSubkernels) {
-        InlineFunctionInfo IFI;
-        InlineResult IR = InlineFunction(*SubkernelCall, IFI);
-        assert(IR.isSuccess());
-      }
+
+      return SubkernelCall;
     };
 
+    CallInst *SubkernelCall;
 
     if (Options.SingleDimThreadLoop) {
-      ThreadIdxLoop LoopLin("threadIdx_linear_index_", BlockDimz, DriverF, this);
+      ThreadIdxLoop LoopLin("threadIdx_linear_index_", BlockSize, DriverF, this);
 
       BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
@@ -1299,7 +1297,7 @@ void FunctionTransformer::createDriverFunction() {
       auto ThreadIdxz = BinaryOperator::Create(
         Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.z", SubkernelCallBB);
 
-      InsertSubkernelCall(LoopLin.Idx, SubkernelCallBB, ThreadIdxx, ThreadIdxy, ThreadIdxz);
+      SubkernelCall = InsertSubkernelCall(LoopLin.Idx, SubkernelCallBB, ThreadIdxx, ThreadIdxy, ThreadIdxz);
 
       LoopLin.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
 
@@ -1324,13 +1322,19 @@ void FunctionTransformer::createDriverFunction() {
       PreservedDataIdx = BinaryOperator::Create(
         Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
 
-      InsertSubkernelCall(PreservedDataIdx, SubkernelCallBB, Loopx.Idx, Loopy.Idx, Loopz.Idx);
+      SubkernelCall = InsertSubkernelCall(PreservedDataIdx, SubkernelCallBB, Loopx.Idx, Loopy.Idx, Loopz.Idx);
 
       Loopx.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
 
       BranchInst::Create(Loopz.EntryBB, SwitchCaseBB);
       BranchInst::Create(WhileEntryBB, Loopz.EndBB);
 
+    }
+
+    if (Options.InlineSubkernels) {
+	    InlineFunctionInfo IFI;
+	    InlineResult IR = InlineFunction(*SubkernelCall, IFI);
+	    assert(IR.isSuccess());
     }
 
   }
@@ -1452,11 +1456,12 @@ void FunctionTransformer::createWrapperFunction() {
 
   // TODO This stopped working when preserveddata is malloced for some reason, investigate
   // opt: /scr0/ivan/src/llvm-project/llvm/lib/Transforms/Utils/ValueMapper.cpp:904: void {anonymous}::Mapper::remapInstruction(llvm::Instruction*): Assertion `(Flags & RF_IgnoreMissingLocals) && "Referenced value not in value map!"' failed.
-  /*
-    InlineFunctionInfo IFI;
-    InlineResult IR = InlineFunction(*DriverCall, IFI);
-    assert(IR.isSuccess());
-  */
+  InlineFunctionInfo IFI;
+  InlineResult IR = InlineFunction(*DriverCall, IFI);
+  if (!IR.isSuccess()) {
+	  LLVM_DEBUG(dbgs() << "Could not inline driver function call:\n");
+	  LLVM_DEBUG(DriverCall->dump());
+  }
 
   replaceFunctionUsages(M, OriginalF, WrapperF);
 
