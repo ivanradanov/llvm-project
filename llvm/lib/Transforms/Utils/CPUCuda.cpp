@@ -733,29 +733,29 @@ void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
 
 class DomAnalysis {
 public:
-	SubkernelIdType SK;
-	FunctionTransformer *Pass;
-	Function *F;
-	ValueToValueMapTy VMap;
-	std::unique_ptr<DominatorTree> DomTree;
+  SubkernelIdType SK;
+  FunctionTransformer *Pass;
+  Function *F;
+  ValueToValueMapTy VMap;
+  std::unique_ptr<DominatorTree> DomTree;
 
-	DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
-		SK(SK), Pass(Pass) {
+  DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
+    SK(SK), Pass(Pass) {
 
-		Function *OriginalF = Pass->SubkernelFs[SK];
+    Function *OriginalF = Pass->SubkernelFs[SK];
 
-		// Clone the function to get a clone of the basic blocks
-		F = CloneFunction(OriginalF, VMap);
+    // Clone the function to get a clone of the basic blocks
+    F = CloneFunction(OriginalF, VMap);
 
-		BasicBlock *OriginalEntryBB = convertBasicBlock(Pass->SubkernelBBs[SK][0], OriginalF, F);
+    BasicBlock *OriginalEntryBB = convertBasicBlock(Pass->SubkernelBBs[SK][0], OriginalF, F);
 
-		// Remove all branch instructions jumping to blocks after barriers
-		for (auto &BB : *OriginalF) {
-			if (Pass->blockIsAfterBarrier(SK, &BB)) {
-				BasicBlock *NewBB = dyn_cast<BasicBlock>(&*VMap[&BB]);
-				// There is only one unconditional predecessor because a block after a
-				// barrier should be the result of SplitBlock()
-				BasicBlock *PredBB = NewBB->getSinglePredecessor();
+    // Remove all branch instructions jumping to blocks after barriers
+    for (auto &BB : *OriginalF) {
+      if (Pass->blockIsAfterBarrier(SK, &BB)) {
+        BasicBlock *NewBB = dyn_cast<BasicBlock>(&*VMap[&BB]);
+        // There is only one unconditional predecessor because a block after a
+        // barrier should be the result of SplitBlock()
+        BasicBlock *PredBB = NewBB->getSinglePredecessor();
         assert(PredBB && "Block after a barrier must have a single predecessor");
         Instruction *Term = PredBB->getTerminator();
         if (auto Branch = dyn_cast<BranchInst>(Term)) {
@@ -767,16 +767,20 @@ public:
       }
     }
 
-		// Make the original entry bb the entry
-		BasicBlock *EntryBB = BasicBlock::Create(F->getContext(), "generated_entry_block", F, &F->getEntryBlock());
+    // Make the original entry bb the entry
+    BasicBlock *EntryBB = BasicBlock::Create(F->getContext(), "generated_entry_block", F, &F->getEntryBlock());
     BranchInst::Create(OriginalEntryBB, EntryBB);
 
     DomTree.reset(new DominatorTree(*F));
-	}
+  }
 
   bool dominates(Value *ValD, Instruction *User) {
-	  return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
-	}
+    return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
+  }
+
+  ~DomAnalysis() {
+    F->eraseFromParent();
+  }
 
 };
 
@@ -834,13 +838,6 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     OriginalBBs.push_back(&BB);
   }
 
-  // Add return from exiting blocks
-  for (auto &bb : nfunc_bbs) {
-    Instruction *term = bb->getTerminator();
-    TransformTerminator transformer(SK, this);
-    transformer.visit(term);
-  }
-
   // Store the used vals for later subkernels
   {
     Value *DataStructPtr = nf->getArg(1);
@@ -871,14 +868,21 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
   }
 
-  DomAnalysis DA(SK, this);
-
   // Construct the entry block which sets up the usedVals params and handles phi
   // instructions
   {
-    BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
-
     ConstantInt *Zero = ConstantInt::get(Type::getInt32Ty(nf->getContext()), 0);
+
+    // The index at which the original arguments start
+    unsigned i = 4;
+    for (auto &Arg : _nf->args()) {
+      Arg.replaceAllUsesWith(nf->getArg(i));
+      ++i;
+    }
+
+    DomAnalysis DA(SK, this);
+
+    BasicBlock *EntryBB = BasicBlock::Create(nf->getContext(), "generated_entry_block", nf, &nf->getEntryBlock());
 
     {
       // Transfer usages of the usedVals to the arguments to the function
@@ -907,12 +911,6 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         }
         UnpackedVal->takeName(Val);
       }
-      // The index at which the original arguments start
-      unsigned i = 4;
-      for (auto &Arg : _nf->args()) {
-        Arg.replaceAllUsesWith(nf->getArg(i));
-        ++i;
-      }
     }
 
     {
@@ -932,6 +930,14 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         I->eraseFromParent();
       }
     }
+
+    // Add return from exiting blocks
+    for (auto &bb : nfunc_bbs) {
+      Instruction *term = bb->getTerminator();
+      TransformTerminator transformer(SK, this);
+      transformer.visit(term);
+    }
+
 
     // List of BBs which are actually used in phi instructions
     BBVector ToHandle;
@@ -1387,9 +1393,9 @@ void FunctionTransformer::createDriverFunction() {
     }
 
     if (Options.InlineSubkernels) {
-	    InlineFunctionInfo IFI;
-	    InlineResult IR = InlineFunction(*SubkernelCall, IFI);
-	    assert(IR.isSuccess());
+      InlineFunctionInfo IFI;
+      InlineResult IR = InlineFunction(*SubkernelCall, IFI);
+      assert(IR.isSuccess());
     }
 
   }
@@ -1514,8 +1520,8 @@ void FunctionTransformer::createWrapperFunction() {
   InlineFunctionInfo IFI;
   InlineResult IR = InlineFunction(*DriverCall, IFI);
   if (!IR.isSuccess()) {
-	  LLVM_DEBUG(dbgs() << "Could not inline driver function call:\n");
-	  LLVM_DEBUG(DriverCall->dump());
+    LLVM_DEBUG(dbgs() << "Could not inline driver function call:\n");
+    LLVM_DEBUG(DriverCall->dump());
   }
 
   replaceFunctionUsages(M, OriginalF, WrapperF);
