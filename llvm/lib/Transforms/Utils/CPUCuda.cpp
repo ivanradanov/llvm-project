@@ -63,15 +63,24 @@ const vector<std::string> Dim3Names = {
 
 struct UsedValVars {
   ValueSet usedVals;
-	ValueSet definedLater;
+  ValueSet definedLater;
   InstSet usedSharedVars;
 };
 
 class FunctionTransformer {
 public:
   struct {
+    // Do we use a single or triple thread loop
+    bool SingleDimThreadLoop = false;
+    // Do we use malloc or alloca for the preserved data array - I think we
+    // might actually overflow the stack with alloca so should be malloc
     bool MallocPreservedDataArray = true;
+    // Do we allocate for all 1024 threads or only as many as we have run the
+    // kernel with
+    // TODO Should we malloc the shared data as well?
     bool DynamicPreservedDataArray = false;
+    // Manually inline the subkernels in the driver function - the optimisations
+    // following this pass should do it anyways if it is deemed profitable
     bool InlineSubkernels = false;
     // Actually they always have to be inlined because otherwise we would get
     // undefined references when linking, so not really an option currently
@@ -510,7 +519,7 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
   for (auto &I : *BB) {
     definedVals.insert(&I);
     if (in_set(usedVals.usedVals, static_cast<Value *>(&I)))
-	    usedVals.definedLater.insert(&I);
+      usedVals.definedLater.insert(&I);
     for (Use &U : I.operands()) {
       Value *v = U.get();
       // TODO is that all the cases?
@@ -723,12 +732,12 @@ void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
 // TODO TEMP implementation - do proper domination analysis - would be best if
 // we can use DominatorTree
 bool dominates(Value *ValD, Instruction *User) {
-	auto Def = dyn_cast<Instruction>(ValD);
-	if (!Def)
-		return false;
-	if (Def->getParent() == User->getParent())
-		return Def->comesBefore(User);
-	return false;
+  auto Def = dyn_cast<Instruction>(ValD);
+  if (!Def)
+    return false;
+  if (Def->getParent() == User->getParent())
+    return Def->comesBefore(User);
+  return false;
 }
 
 // TODO optimise when usedVals gets populated by simple struct member accesses,
@@ -782,7 +791,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
   // Store the used vals for later subkernels
   {
-	  Value *DataStructPtr = nf->getArg(1);
+    Value *DataStructPtr = nf->getArg(1);
 
     ConstantInt *Zero = ConstantInt::get(I32Type, 0);
 
@@ -839,7 +848,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
             return !dominates(Val, I);
           });
         else
-	        Val->replaceAllUsesWith(UnpackedVal);
+          Val->replaceAllUsesWith(UnpackedVal);
         UnpackedVal->takeName(Val);
       }
       // The index at which the original arguments start
@@ -1184,30 +1193,39 @@ void FunctionTransformer::createDriverFunction() {
     "blockDim_z", EntryBB);
   Dim3Calls.push_back(BlockDimz);
 
+  BinaryOperator *BlockSize = BinaryOperator::Create(
+    Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
+  BlockSize = BinaryOperator::Create(
+    Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+
   Instruction *PreservedData;
   if (Options.MallocPreservedDataArray) {
+    Value *MallocSize;
     DataLayout *DL = new DataLayout(M);
     ConstantInt *StructSize = ConstantInt::get(GepIndexType, DL->getTypeAllocSize(CombinedDataType));
-    ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
-    Constant *MallocSize = ConstantExpr::getMul(StructSize, MaxCudaThreads);
+    if (!Options.DynamicPreservedDataArray) {
+      ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
+      MallocSize = ConstantExpr::getMul(StructSize, MaxCudaThreads);
+    } else {
+      MallocSize = BinaryOperator::Create(
+        Instruction::BinaryOps::Mul, BlockSize, StructSize, "blockSize", EntryBB);
+    }
     Instruction *Malloc = CallInst::CreateMalloc(
       static_cast<Instruction *>(StaticSharedData),
       IntegerType::getInt32Ty(M->getContext()),
       CombinedDataType,
-      //IntegerType::getInt32Ty(M->getContext()),
       MallocSize, nullptr, nullptr, "preserved_data");
     PreservedData = Malloc;
-  } else if (!Options.DynamicPreservedDataArray) {
-    ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
-    PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
-                                   MaxCudaThreads, "preserved_data", EntryBB);
   } else {
-    BinaryOperator *BlockSize = BinaryOperator::Create(
-      Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
-    BlockSize = BinaryOperator::Create(
-      Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+    Value *Size = Options.DynamicPreservedDataArray ?
+      static_cast<Value *>(ConstantInt::get(GepIndexType, MAX_CUDA_THREADS)) : static_cast<Value *>(BlockSize);
+    if (!Options.DynamicPreservedDataArray) {
+      Size = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
+    } else {
+      Size = BlockSize;
+    }
     PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
-                                   BlockSize, "preserved_data", EntryBB);
+                                   Size, "preserved_data", EntryBB);
   }
 
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
@@ -1236,53 +1254,85 @@ void FunctionTransformer::createDriverFunction() {
     BasicBlock *SwitchCaseBB = BasicBlock::Create(DriverF->getContext(), "switch_case", DriverF);
     Switch->addCase(CaseConst, SwitchCaseBB);
 
-    ThreadIdxLoop Loopz("threadIdx_z", BlockDimz, DriverF, this);
-    ThreadIdxLoop Loopy("threadIdx_y", BlockDimy, DriverF, this);
-    ThreadIdxLoop Loopx("threadIdx_x", BlockDimx, DriverF, this);
-    Loopz.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
-    Loopy.hookUpBBs(Loopx.EntryBB, Loopx.EndBB);
+    auto InsertSubkernelCall = [&](Value *PreservedDataIdx, BasicBlock *SubkernelCallBB,
+                                   Value *ThreadIdxx, Value *ThreadIdxy, Value *ThreadIdxz) {
+      GetElementPtrInst *ThreadPreservedData = GetElementPtrInst::Create(
+        CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
 
-    BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
+      ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
+      // original args + gridDim, blockIdx, blockDim
+      for (auto &Arg : DriverF->args()) {
+        Args.push_back(&Arg);
+      }
+      // threadIdx
+      CallInst *ThreadIdx = CallInst::Create(
+        Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
+        {ThreadIdxx, ThreadIdxy, ThreadIdxz}, "threadIdx", SubkernelCallBB);
+      Dim3Calls.push_back(ThreadIdx);
+      Args.push_back(ThreadIdx);
+      CallInst *SubkernelCall = CallInst::Create(
+        SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
+        Args, "local_ret", SubkernelCallBB);
+      new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
+      // TODO inline those CallInsts
+      if (Options.InlineSubkernels) {
+        InlineFunctionInfo IFI;
+        InlineResult IR = InlineFunction(*SubkernelCall, IFI);
+        assert(IR.isSuccess());
+      }
+    };
 
-    auto PreservedDataIdx = BinaryOperator::Create(
-      Instruction::BinaryOps::Mul, BlockDimy, Loopz.Idx, "threadPreservedDataIdx", SubkernelCallBB);
-    PreservedDataIdx = BinaryOperator::Create(
-      Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
-    PreservedDataIdx = BinaryOperator::Create(
-      Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
-    PreservedDataIdx = BinaryOperator::Create(
-      Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
 
-    GetElementPtrInst *ThreadPreservedData = GetElementPtrInst::Create(
-      CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
+    if (Options.SingleDimThreadLoop) {
+      ThreadIdxLoop LoopLin("threadIdx_linear_index_", BlockDimz, DriverF, this);
 
-    ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
-    // original args + gridDim, blockIdx, blockDim
-    for (auto &Arg : DriverF->args()) {
-      Args.push_back(&Arg);
+      BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
+
+      auto ThreadIdxx = BinaryOperator::Create(
+        Instruction::BinaryOps::URem, LoopLin.Idx, BlockDimx, "threadIdx.x", SubkernelCallBB);
+      auto Tmp = BinaryOperator::Create(
+        Instruction::BinaryOps::UDiv, LoopLin.Idx, BlockDimx, "rest", SubkernelCallBB);
+      auto ThreadIdxy = BinaryOperator::Create(
+        Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.y", SubkernelCallBB);
+      Tmp = BinaryOperator::Create(
+        Instruction::BinaryOps::UDiv, Tmp, BlockDimy, "rest", SubkernelCallBB);
+      auto ThreadIdxz = BinaryOperator::Create(
+        Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.z", SubkernelCallBB);
+
+      InsertSubkernelCall(LoopLin.Idx, SubkernelCallBB, ThreadIdxx, ThreadIdxy, ThreadIdxz);
+
+      LoopLin.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
+
+      BranchInst::Create(LoopLin.EntryBB, SwitchCaseBB);
+      BranchInst::Create(WhileEntryBB, LoopLin.EndBB);
+
+    } else {
+      ThreadIdxLoop Loopz("threadIdx_z_", BlockDimz, DriverF, this);
+      ThreadIdxLoop Loopy("threadIdx_y_", BlockDimy, DriverF, this);
+      ThreadIdxLoop Loopx("threadIdx_x_", BlockDimx, DriverF, this);
+      Loopz.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
+      Loopy.hookUpBBs(Loopx.EntryBB, Loopx.EndBB);
+
+      BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
+
+      auto PreservedDataIdx = BinaryOperator::Create(
+        Instruction::BinaryOps::Mul, BlockDimy, Loopz.Idx, "threadPreservedDataIdx", SubkernelCallBB);
+      PreservedDataIdx = BinaryOperator::Create(
+        Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+      PreservedDataIdx = BinaryOperator::Create(
+        Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+      PreservedDataIdx = BinaryOperator::Create(
+        Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+
+      InsertSubkernelCall(PreservedDataIdx, SubkernelCallBB, Loopx.Idx, Loopy.Idx, Loopz.Idx);
+
+      Loopx.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
+
+      BranchInst::Create(Loopz.EntryBB, SwitchCaseBB);
+      BranchInst::Create(WhileEntryBB, Loopz.EndBB);
+
     }
-    // threadIdx
-    CallInst *ThreadIdx = CallInst::Create(
-      Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
-      {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "threadIdx", SubkernelCallBB);
-    Dim3Calls.push_back(ThreadIdx);
-    Args.push_back(ThreadIdx);
-    CallInst *SubkernelCall = CallInst::Create(
-      SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
-      Args, "local_ret", SubkernelCallBB);
-    new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
-    // TODO inline those CallInsts
 
-    Loopx.hookUpBBs(SubkernelCallBB, SubkernelCallBB);
-
-    BranchInst::Create(Loopz.EntryBB, SwitchCaseBB);
-    BranchInst::Create(WhileEntryBB, Loopz.EndBB);
-
-    if (Options.InlineSubkernels) {
-      InlineFunctionInfo IFI;
-      InlineResult IR = InlineFunction(*SubkernelCall, IFI);
-      assert(IR.isSuccess());
-    }
   }
 
   if (Options.InlineDim3Fs) {
