@@ -14,6 +14,7 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Dominators.h"
 
 #include <queue>
 #include <vector>
@@ -75,10 +76,10 @@ public:
     bool SingleDimThreadLoop = false;
     // Do we use malloc or alloca for the preserved data array - I think we
     // might actually overflow the stack with alloca so should be malloc
+    // TODO Should we malloc the shared data as well?
     bool MallocPreservedDataArray = true;
     // Do we allocate for all 1024 threads or only as many as we have run the
     // kernel with
-    // TODO Should we malloc the shared data as well?
     bool DynamicPreservedDataArray = false;
     // Manually inline the subkernels in the driver function - the optimisations
     // following this pass should do it anyways if it is deemed profitable
@@ -730,6 +731,55 @@ void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
   }
 }
 
+class DomAnalysis {
+public:
+	SubkernelIdType SK;
+	FunctionTransformer *Pass;
+	Function *F;
+	ValueToValueMapTy VMap;
+	std::unique_ptr<DominatorTree> DomTree;
+
+	DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
+		SK(SK), Pass(Pass) {
+
+		Function *OriginalF = Pass->SubkernelFs[SK];
+
+		// Clone the function to get a clone of the basic blocks
+		F = CloneFunction(OriginalF, VMap);
+
+		BasicBlock *OriginalEntryBB = convertBasicBlock(Pass->SubkernelBBs[SK][0], OriginalF, F);
+
+		// Remove all branch instructions jumping to blocks after barriers
+		for (auto &BB : *OriginalF) {
+			if (Pass->blockIsAfterBarrier(SK, &BB)) {
+				BasicBlock *NewBB = dyn_cast<BasicBlock>(&*VMap[&BB]);
+				// There is only one unconditional predecessor because a block after a
+				// barrier should be the result of SplitBlock()
+				BasicBlock *PredBB = NewBB->getSinglePredecessor();
+        assert(PredBB && "Block after a barrier must have a single predecessor");
+        Instruction *Term = PredBB->getTerminator();
+        if (auto Branch = dyn_cast<BranchInst>(Term)) {
+          Branch->eraseFromParent();
+          ReturnInst::Create(PredBB->getContext(), nullptr, PredBB);
+        } else {
+          assert(false && "Block after a barrier cannot be jumped to by anything other than an unconditional branch");
+        }
+      }
+    }
+
+		// Make the original entry bb the entry
+		BasicBlock *EntryBB = BasicBlock::Create(F->getContext(), "generated_entry_block", F, &F->getEntryBlock());
+    BranchInst::Create(OriginalEntryBB, EntryBB);
+
+    DomTree.reset(new DominatorTree(*F));
+	}
+
+  bool dominates(Value *ValD, Instruction *User) {
+	  return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
+	}
+
+};
+
 // TODO TEMP implementation - do proper domination analysis - would be best if
 // we can use DominatorTree
 bool dominates(Value *ValD, Instruction *User) {
@@ -744,6 +794,7 @@ bool dominates(Value *ValD, Instruction *User) {
 // TODO optimise when usedVals gets populated by simple struct member accesses,
 // for example, currently accesses of dim3 members get added to usedVals
 void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
+
   Function *_nf = SubkernelFs[SK];
 
   BBVector nfunc_bbs = SubkernelBBs[SK];
@@ -820,6 +871,8 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
   }
 
+  DomAnalysis DA(SK, this);
+
   // Construct the entry block which sets up the usedVals params and handles phi
   // instructions
   {
@@ -843,13 +896,15 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         // not already dominate the use - this happens when a subkernel starts
         // execution after a barrier and a value is passed back to an earlier BB
         // using a PHI node
-        if (in_vector(SubkernelBBs[SK], dyn_cast<Instruction>(Val)->getParent()))
+        if (in_vector(SubkernelBBs[SK], dyn_cast<Instruction>(Val)->getParent())) {
+          assert(isa<PHINode>(Val));
           Val->replaceUsesWithIf(UnpackedVal, [&](Use &U) {
             Instruction *I = dyn_cast<Instruction>(U.getUser());
-            return !dominates(Val, I);
+            return !DA.dominates(Val, I);
           });
-        else
+        } else {
           Val->replaceAllUsesWith(UnpackedVal);
+        }
         UnpackedVal->takeName(Val);
       }
       // The index at which the original arguments start
