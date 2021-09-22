@@ -1091,31 +1091,31 @@ def CPUDispatch : InheritableAttr {
 def CUDAConstant : InheritableAttr {
   let Spellings = [GNU<"constant">, Declspec<"__constant__">];
   let Subjects = SubjectList<[Var]>;
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Documentation = [Undocumented];
 }
 
 def CUDACudartBuiltin : IgnoredAttr {
   let Spellings = [GNU<"cudart_builtin">, Declspec<"__cudart_builtin__">];
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
 }
 
 def CUDADevice : InheritableAttr {
   let Spellings = [GNU<"device">, Declspec<"__device__">];
   let Subjects = SubjectList<[Function, Var]>;
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Documentation = [Undocumented];
 }
 
 def CUDADeviceBuiltin : IgnoredAttr {
   let Spellings = [GNU<"device_builtin">, Declspec<"__device_builtin__">];
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
 }
 
 def CUDADeviceBuiltinSurfaceType : InheritableAttr {
   let Spellings = [GNU<"device_builtin_surface_type">,
                    Declspec<"__device_builtin_surface_type__">];
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Subjects = SubjectList<[CXXRecord]>;
   let Documentation = [CUDADeviceBuiltinSurfaceTypeDocs];
   let MeaningfulToClassTemplateDefinition = 1;
@@ -1125,7 +1125,7 @@ def CUDADeviceBuiltinSurfaceType : InheritableAttr {
 def CUDADeviceBuiltinTextureType : InheritableAttr {
   let Spellings = [GNU<"device_builtin_texture_type">,
                    Declspec<"__device_builtin_texture_type__">];
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Subjects = SubjectList<[CXXRecord]>;
   let Documentation = [CUDADeviceBuiltinTextureTypeDocs];
   let MeaningfulToClassTemplateDefinition = 1;
@@ -1134,18 +1134,10 @@ def CUDADeviceBuiltinTextureType : InheritableAttr {
 def : MutualExclusions<[CUDADeviceBuiltinSurfaceType,
                         CUDADeviceBuiltinTextureType]>;
 
-def CPUCUDAGlobal : InheritableAttr {
-  let Spellings = [GNU<"cpucuda_global">, Declspec<"__cpucuda_global__">];
-  let Subjects = SubjectList<[Function]>;
-  let Documentation = [Undocumented];
-  let LangOpts = [CPUCUDA];
-  let SimpleHandler = 1;
-}
-
 def CUDAGlobal : InheritableAttr {
   let Spellings = [GNU<"global">, Declspec<"__global__">];
   let Subjects = SubjectList<[Function]>;
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Documentation = [Undocumented];
 }
 def : MutualExclusions<[CUDADevice, CUDAGlobal]>;
@@ -1153,7 +1145,7 @@ def : MutualExclusions<[CUDADevice, CUDAGlobal]>;
 def CUDAHost : InheritableAttr {
   let Spellings = [GNU<"host">, Declspec<"__host__">];
   let Subjects = SubjectList<[Function]>;
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Documentation = [Undocumented];
   let SimpleHandler = 1;
 }
@@ -1176,7 +1168,7 @@ def CUDAInvalidTarget : InheritableAttr {
 def CUDALaunchBounds : InheritableAttr {
   let Spellings = [GNU<"launch_bounds">, Declspec<"__launch_bounds__">];
   let Args = [ExprArgument<"MaxThreads">, ExprArgument<"MinBlocks", 1>];
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Subjects = SubjectList<[ObjCMethod, FunctionLike]>;
   // An AST node is created for this attribute, but is not used by other parts
   // of the compiler. However, this node needs to exist in the AST because
@@ -1184,18 +1176,10 @@ def CUDALaunchBounds : InheritableAttr {
   let Documentation = [Undocumented];
 }
 
-def CPUCUDAShared : InheritableAttr {
-  let Spellings = [GNU<"cpucuda_shared">, Declspec<"__cpucuda_shared__">];
-  let Subjects = SubjectList<[Var]>;
-  let LangOpts = [CPUCUDA];
-  let Documentation = [Undocumented];
-  let SimpleHandler = 1;
-}
-
 def CUDAShared : InheritableAttr {
   let Spellings = [GNU<"shared">, Declspec<"__shared__">];
   let Subjects = SubjectList<[Var]>;
-  let LangOpts = [CUDA];
+  let LangOpts = [CUDA, CPUCUDA];
   let Documentation = [Undocumented];
 }
 def : MutualExclusions<[CUDAConstant, CUDAShared, HIPManaged]>;

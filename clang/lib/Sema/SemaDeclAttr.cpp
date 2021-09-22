@@ -8438,13 +8438,6 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
   case ParsedAttr::AT_UsingIfExists:
     handleSimpleAttribute<UsingIfExistsAttr>(S, D, AL);
     break;
-
-  case ParsedAttr::AT_CPUCUDAGlobal:
-	  handleSimpleAttribute<CPUCUDAGlobalAttr>(S, D, AL);
-	  break;
-  case ParsedAttr::AT_CPUCUDAShared:
-	  handleSimpleAttribute<CPUCUDASharedAttr>(S, D, AL);
-	  break;
   }
 }
 

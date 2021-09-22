@@ -263,7 +263,7 @@ llvm::Constant *CodeGenModule::getOrCreateStaticVarDecl(
   // variables cannot have an initializer.
   llvm::Constant *Init = nullptr;
   if (Ty.getAddressSpace() == LangAS::opencl_local ||
-      D.hasAttr<CUDASharedAttr>() || D.hasAttr<LoaderUninitializedAttr>() || D.hasAttr<CPUCUDASharedAttr>())
+      D.hasAttr<CUDASharedAttr>() || D.hasAttr<LoaderUninitializedAttr>())
     Init = llvm::UndefValue::get(LTy);
   else
     Init = EmitNullConstant(Ty);
@@ -426,7 +426,7 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   bool isCudaSharedVar = getLangOpts().CUDA && getLangOpts().CUDAIsDevice &&
                          D.hasAttr<CUDASharedAttr>();
   // If this value has an initializer, emit it.
-  if (D.getInit() && !isCudaSharedVar && !D.hasAttr<CPUCUDASharedAttr>())
+  if (D.getInit() && !isCudaSharedVar && !(getLangOpts().CPUCUDA && D.hasAttr<CUDASharedAttr>()))
     var = AddInitializerToStaticVarDecl(D, var);
 
   var->setAlignment(alignment.getAsAlign());
@@ -1533,7 +1533,7 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // TODO is this the only place where we have to tag cpucuda shared memory?
       // What about global shared variables of form 'extern __shared__ Foo
       // foo[]'?
-      if (D.hasAttr<CPUCUDASharedAttr>()) {
+      if (getLangOpts().CPUCUDA && D.hasAttr<CUDASharedAttr>()) {
 	      llvm::AllocaInst *AllocaInst = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer());
 	      assert(AllocaInst);
         AllocaInst->addAnnotationMetadata("cpucuda_shared");

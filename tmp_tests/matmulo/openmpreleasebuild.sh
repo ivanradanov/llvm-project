@@ -7,7 +7,7 @@ CCX="../../build-clang/bin/clang++"
 #OPT="../../build/bin/opt"
 #OPT="../../build/bin/llvm-link"
 
-$CCX -I../../build-clang/projects/openmp/runtime/src/ -I.. -fopenmp=libomp -Wall -S main.cpp -O3 -emit-llvm
+$CCX -x cpucuda -I../../build-clang/projects/openmp/runtime/src/ -I.. -fopenmp=libomp -Wall -S main.cpp -O3 -emit-llvm
 
 ../../build/bin/opt main.ll -passes=cpucuda -o main.cpu.ll
 

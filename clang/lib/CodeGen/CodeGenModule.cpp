@@ -1359,11 +1359,13 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   // static device variable depends on whether the variable is referenced by
   // a host or device host function. Therefore the mangled name cannot be
   // cached.
-  if (!LangOpts.CUDAIsDevice ||
-      !getContext().mayExternalizeStaticVar(GD.getDecl())) {
-    auto FoundName = MangledDeclNames.find(CanonicalGD);
-    if (FoundName != MangledDeclNames.end())
-      return FoundName->second;
+  if (LangOpts.CUDA || LangOpts.HIP) {
+    if (!LangOpts.CUDAIsDevice ||
+        !getContext().mayExternalizeStaticVar(GD.getDecl())) {
+      auto FoundName = MangledDeclNames.find(CanonicalGD);
+      if (FoundName != MangledDeclNames.end())
+        return FoundName->second;
+    }
   }
 
   // Keep the first result in the case of a mangling collision.
@@ -1379,16 +1381,17 @@ StringRef CodeGenModule::getMangledName(GlobalDecl GD) {
   // result in undefined behavior. Even though we cannot check that naming
   // directly between host- and device-compilations, the host- and
   // device-mangling in host compilation could help catching certain ones.
-  assert(!isa<FunctionDecl>(ND) || !ND->hasAttr<CUDAGlobalAttr>() ||
-         getLangOpts().CUDAIsDevice ||
-         (getContext().getAuxTargetInfo() &&
-          (getContext().getAuxTargetInfo()->getCXXABI() !=
-           getContext().getTargetInfo().getCXXABI())) ||
-         getCUDARuntime().getDeviceSideName(ND) ==
-             getMangledNameImpl(
-                 *this,
-                 GD.getWithKernelReferenceKind(KernelReferenceKind::Kernel),
-                 ND));
+  if (!getLangOpts().CPUCUDA)
+    assert(!isa<FunctionDecl>(ND) || !ND->hasAttr<CUDAGlobalAttr>() ||
+           getLangOpts().CUDAIsDevice ||
+           (getContext().getAuxTargetInfo() &&
+            (getContext().getAuxTargetInfo()->getCXXABI() !=
+             getContext().getTargetInfo().getCXXABI())) ||
+           getCUDARuntime().getDeviceSideName(ND) ==
+           getMangledNameImpl(
+             *this,
+             GD.getWithKernelReferenceKind(KernelReferenceKind::Kernel),
+             ND));
 
   auto Result = Manglings.insert(std::make_pair(MangledName, GD));
   return MangledDeclNames[CanonicalGD] = Result.first->first();
