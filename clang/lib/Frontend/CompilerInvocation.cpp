@@ -2539,6 +2539,9 @@ static void GenerateFrontendArgs(const FrontendOptions &Opts,
     case Language::CUDA:
       Lang = "cuda";
       break;
+    case Language::CPUCUDA:
+      Lang = "cpucuda";
+      break;
     case Language::HIP:
       Lang = "hip";
       break;
@@ -2726,6 +2729,7 @@ static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
                 .Case("cl", Language::OpenCL)
                 .Case("clcpp", Language::OpenCLCXX)
                 .Case("cuda", Language::CUDA)
+                .Case("cpucuda", Language::CPUCUDA)
                 .Case("hip", Language::HIP)
                 .Case("c++", Language::CXX)
                 .Case("objective-c", Language::ObjC)
@@ -3096,6 +3100,9 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
     case Language::CUDA:
       LangStd = LangStandard::lang_cuda;
       break;
+    case Language::CPUCUDA:
+      LangStd = LangStandard::lang_cpucuda;
+      break;
     case Language::Asm:
     case Language::C:
 #if defined(CLANG_DEFAULT_STD_C)
@@ -3190,6 +3197,7 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
 
   Opts.HIP = IK.getLanguage() == Language::HIP;
   Opts.CUDA = IK.getLanguage() == Language::CUDA || Opts.HIP;
+  Opts.CPUCUDA = IK.getLanguage() == Language::CPUCUDA;
   if (Opts.HIP) {
     // HIP toolchain does not support 'Fast' FPOpFusion in backends since it
     // fuses multiplication/addition instructions without contract flag from
@@ -3243,6 +3251,10 @@ static bool IsInputCompatibleWithStandard(InputKind IK,
     return S.getLanguage() == Language::CUDA ||
            S.getLanguage() == Language::CXX;
 
+  case Language::CPUCUDA:
+    return S.getLanguage() == Language::CPUCUDA ||
+           S.getLanguage() == Language::CXX;
+
   case Language::HIP:
     return S.getLanguage() == Language::CXX || S.getLanguage() == Language::HIP;
 
@@ -3273,6 +3285,8 @@ static const StringRef GetInputKindName(InputKind IK) {
     return "C++ for OpenCL";
   case Language::CUDA:
     return "CUDA";
+  case Language::CPUCUDA:
+    return "CPUCUDA";
   case Language::RenderScript:
     return "RenderScript";
   case Language::HIP:

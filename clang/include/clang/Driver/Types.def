@@ -42,6 +42,8 @@ TYPE("clcpp",                    CLCXX,        PP_CXX,          "clcpp",  phases
 TYPE("cuda-cpp-output",          PP_CUDA,      INVALID,         "cui",    phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("cuda",                     CUDA,         PP_CUDA,         "cu",     phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("cuda",                     CUDA_DEVICE,  PP_CUDA,         "cu",     phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
+TYPE("cpucuda-cpp-output",       PP_CPUCUDA,   INVALID,         "cpucui", phases::Compile, phases::Backend, phases::Assemble, phases::Link)
+TYPE("cpucuda",                  CPUCUDA,      PP_CPUCUDA,      "cpucu",  phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("hip-cpp-output",           PP_HIP,       INVALID,         "cui",    phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("hip",                      HIP,          PP_HIP,          "cu",     phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)
 TYPE("hip",                      HIP_DEVICE,   PP_HIP,          "cu",     phases::Preprocess, phases::Compile, phases::Backend, phases::Assemble, phases::Link)

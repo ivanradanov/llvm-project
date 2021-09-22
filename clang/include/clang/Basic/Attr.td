@@ -324,6 +324,7 @@ class LangOpt<string name, code customCode = [{}]> {
 def MicrosoftExt : LangOpt<"MicrosoftExt">;
 def Borland : LangOpt<"Borland">;
 def CUDA : LangOpt<"CUDA">;
+def CPUCUDA : LangOpt<"CPUCUDA">;
 def HIP : LangOpt<"HIP">;
 def SYCL : LangOpt<"SYCLIsDevice">;
 def COnly : LangOpt<"", "!LangOpts.CPlusPlus">;
@@ -1137,6 +1138,7 @@ def CPUCUDAGlobal : InheritableAttr {
   let Spellings = [GNU<"cpucuda_global">, Declspec<"__cpucuda_global__">];
   let Subjects = SubjectList<[Function]>;
   let Documentation = [Undocumented];
+  let LangOpts = [CPUCUDA];
   let SimpleHandler = 1;
 }
 
@@ -1185,6 +1187,7 @@ def CUDALaunchBounds : InheritableAttr {
 def CPUCUDAShared : InheritableAttr {
   let Spellings = [GNU<"cpucuda_shared">, Declspec<"__cpucuda_shared__">];
   let Subjects = SubjectList<[Var]>;
+  let LangOpts = [CPUCUDA];
   let Documentation = [Undocumented];
   let SimpleHandler = 1;
 }

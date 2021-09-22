@@ -129,6 +129,7 @@ bool types::isAcceptedByClang(ID Id) {
   case TY_CL: case TY_CLCXX:
   case TY_CUDA: case TY_PP_CUDA:
   case TY_CUDA_DEVICE:
+  case TY_CPUCUDA: case TY_PP_CPUCUDA:
   case TY_HIP:
   case TY_PP_HIP:
   case TY_HIP_DEVICE:
@@ -159,6 +160,7 @@ bool types::isDerivedFromC(ID Id) {
   case TY_PP_CUDA:
   case TY_CUDA:
   case TY_CUDA_DEVICE:
+  case TY_CPUCUDA:
   case TY_PP_HIP:
   case TY_HIP:
   case TY_HIP_DEVICE:
@@ -212,6 +214,7 @@ bool types::isCXX(ID Id) {
   case TY_ObjCXXHeader: case TY_PP_ObjCXXHeader:
   case TY_CXXModule: case TY_PP_CXXModule:
   case TY_CUDA: case TY_PP_CUDA: case TY_CUDA_DEVICE:
+  case TY_CPUCUDA: case TY_PP_CPUCUDA:
   case TY_HIP:
   case TY_PP_HIP:
   case TY_HIP_DEVICE:

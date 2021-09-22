@@ -892,6 +892,7 @@ void PrintPreambleAction::ExecuteAction() {
   case Language::OpenCL:
   case Language::OpenCLCXX:
   case Language::CUDA:
+  case Language::CPUCUDA:
   case Language::HIP:
     break;
 
