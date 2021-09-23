@@ -1244,6 +1244,16 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_MP);
   Args.AddLastArg(CmdArgs, options::OPT_MV);
 
+  // Add include for cpucuda TODO we probably want to somehow look at the
+  // language option and do this only if it is cpucuda, although I guess it does
+  // not matter much
+
+  // TEMP
+  CmdArgs.push_back("-include");
+  CmdArgs.push_back("cpucuda/detail/__cpucuda_internal_defs.h");
+  //CmdArgs.push_back("-Icpucuda/");
+  // TEMP
+
   // Add offload include arguments specific for CUDA/HIP.  This must happen
   // before we -I or -include anything else, because we must pick up the
   // CUDA/HIP headers from the particular CUDA/ROCm installation, rather than

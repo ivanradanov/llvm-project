@@ -1253,7 +1253,7 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
   Actions.PushLambdaScope();
 
   ParsedAttributes Attr(AttrFactory);
-  if (getLangOpts().CUDA) {
+  if (getLangOpts().CUDA || getLangOpts().CPUCUDA) {
     // In CUDA code, GNU attributes are allowed to appear immediately after the
     // "[...]", even if there is no "(...)" before the lambda body.
     MaybeParseGNUAttributes(D);

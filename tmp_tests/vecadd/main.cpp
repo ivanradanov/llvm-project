@@ -8,7 +8,7 @@
 
 int NITERATIONS = 1;
 
-#include "__cpucuda_internal_header.h"
+//#include "__cpucuda_internal_header.h"
 
 #define STREAM_TYPE double
 
