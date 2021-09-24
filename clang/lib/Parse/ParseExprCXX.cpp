@@ -1262,7 +1262,7 @@ ExprResult Parser::ParseLambdaExpressionAfterIntroducer(
   // Helper to emit a warning if we see a CUDA host/device/global attribute
   // after '(...)'. nvcc doesn't accept this.
   auto WarnIfHasCUDATargetAttr = [&] {
-    if (getLangOpts().CUDA)
+    if (getLangOpts().CUDA || getLangOpts().CPUCUDA)
       for (const ParsedAttr &A : Attr)
         if (A.getKind() == ParsedAttr::AT_CUDADevice ||
             A.getKind() == ParsedAttr::AT_CUDAHost ||
