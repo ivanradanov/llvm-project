@@ -6,6 +6,8 @@
 
 using cpucuda::dim3;
 
+// TODO extern "C" these so that they don't get mangled
+
 dim3 __cpucuda_construct_dim3(unsigned x, unsigned y, unsigned z) {
 	return dim3(x, y, z);
 }
@@ -43,6 +45,14 @@ void __cpucuda_real_func_user() {
 	__cpucuda_real_gridDim();
 }
 
+//#define __shared__ __attribute__((annotate("cpucuda_shared")))
+
+//extern "C" __host__ __device__  unsigned CUDARTAPI __cudaPushCallConfiguration(dim3 gridDim,
+extern "C" unsigned __cpucudaPushCallConfiguration(dim3 gridDim,
+                                                   dim3 blockDim,
+                                                   size_t sharedMem = 0,
+                                                   struct CUstream_st *stream = 0);
+
 #define threadIdx __cpucuda_threadIdx()
 #define blockIdx __cpucuda_blockIdx()
 #define blockDim __cpucuda_blockDim()
@@ -54,8 +64,5 @@ void __cpucuda_real_func_user() {
 #define __shared__ __attribute__((shared))
 #define __device__ __attribute__((device))
 #define __host__ __attribute__((host))
-
-//#define __shared__ __attribute__((annotate("cpucuda_shared")))
-
 
 #endif

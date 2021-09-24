@@ -1250,7 +1250,7 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
 
   // TEMP
   CmdArgs.push_back("-include");
-  CmdArgs.push_back("cpucuda/detail/__cpucuda_internal_defs.h");
+  CmdArgs.push_back("cpucuda_detail/__cpucuda_internal_defs.h");
   //CmdArgs.push_back("-Icpucuda/");
   // TEMP
 

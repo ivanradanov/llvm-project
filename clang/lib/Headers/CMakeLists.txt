@@ -170,14 +170,14 @@ set(openmp_wrapper_files
 )
 
 set(cpucuda_impl_header_files
-  detail/event.hpp
-  detail/kernel_execution_context.hpp
-  detail/types.hpp
-  detail/queue.hpp
-  detail/malloc.hpp
-  detail/util.hpp
-  detail/runtime.hpp
-  detail/__cpucuda_internal_defs.h
+  cpucuda_detail/event.hpp
+  cpucuda_detail/kernel_execution_context.hpp
+  cpucuda_detail/types.hpp
+  cpucuda_detail/queue.hpp
+  cpucuda_detail/malloc.hpp
+  cpucuda_detail/util.hpp
+  cpucuda_detail/runtime.hpp
+  cpucuda_detail/__cpucuda_internal_defs.h
   )
 
 set(cpucuda_header_files
@@ -268,7 +268,7 @@ install(
 
 install(
   FILES ${cpucuda_impl_header_files}
-  DESTINATION ${header_install_dir}/detail
+  DESTINATION ${header_install_dir}/cpucuda_detail
   COMPONENT clang-resource-headers)
 
 if (NOT LLVM_ENABLE_IDE)
