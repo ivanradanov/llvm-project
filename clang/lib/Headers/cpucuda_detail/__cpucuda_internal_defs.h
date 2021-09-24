@@ -8,50 +8,54 @@ using cpucuda::dim3;
 
 // TODO extern "C" these so that they don't get mangled
 
-dim3 __cpucuda_construct_dim3(unsigned x, unsigned y, unsigned z) {
-	return dim3(x, y, z);
-}
-unsigned __cpucuda_dim3_get_x(dim3 d) {
-	return d.x;
-}
-unsigned __cpucuda_dim3_get_y(dim3 d) {
-	return d.y;
-}
-unsigned __cpucuda_dim3_get_z(dim3 d) {
-	return d.z;
-}
+extern "C" {
 
-dim3 __cpucuda_declared_dim3_getter();
-void __cpucuda_declared_dim3_user(dim3 d);
+  dim3 __cpucuda_construct_dim3(unsigned x, unsigned y, unsigned z) {
+    return dim3(x, y, z);
+  }
+  unsigned __cpucuda_dim3_get_x(dim3 d) {
+    return d.x;
+  }
+  unsigned __cpucuda_dim3_get_y(dim3 d) {
+    return d.y;
+  }
+  unsigned __cpucuda_dim3_get_z(dim3 d) {
+    return d.z;
+  }
 
-void __cpucuda_dim3_to_arg() {
-	dim3 d = __cpucuda_declared_dim3_getter();
-	__cpucuda_declared_dim3_user(d);
-}
+  dim3 __cpucuda_declared_dim3_getter();
+  void __cpucuda_declared_dim3_user(dim3 d);
 
-dim3 __cpucuda_threadIdx();
-dim3 __cpucuda_blockIdx();
-dim3 __cpucuda_blockDim();
-dim3 __cpucuda_gridDim();
-void __cpucuda_syncthreads();
+  void __cpucuda_dim3_to_arg() {
+    dim3 d = __cpucuda_declared_dim3_getter();
+    __cpucuda_declared_dim3_user(d);
+  }
 
-dim3 __cpucuda_real_blockIdx();
-dim3 __cpucuda_real_blockDim();
-dim3 __cpucuda_real_gridDim();
+  dim3 __cpucuda_threadIdx();
+  dim3 __cpucuda_blockIdx();
+  dim3 __cpucuda_blockDim();
+  dim3 __cpucuda_gridDim();
+  void __cpucuda_syncthreads();
 
-void __cpucuda_real_func_user() {
-	__cpucuda_real_blockIdx();
-	__cpucuda_real_blockDim();
-	__cpucuda_real_gridDim();
-}
+  dim3 __cpucuda_real_blockIdx();
+  dim3 __cpucuda_real_blockDim();
+  dim3 __cpucuda_real_gridDim();
+
+  void __cpucuda_real_func_user() {
+    __cpucuda_real_blockIdx();
+    __cpucuda_real_blockDim();
+    __cpucuda_real_gridDim();
+  }
 
 //#define __shared__ __attribute__((annotate("cpucuda_shared")))
 
 //extern "C" __host__ __device__  unsigned CUDARTAPI __cudaPushCallConfiguration(dim3 gridDim,
-extern "C" unsigned __cpucudaPushCallConfiguration(dim3 gridDim,
-                                                   dim3 blockDim,
-                                                   size_t sharedMem = 0,
-                                                   struct CUstream_st *stream = 0);
+  unsigned __cpucudaPushCallConfiguration(dim3 gridDim,
+                                          dim3 blockDim,
+                                          size_t sharedMem = 0,
+                                          struct CUstream_st *stream = 0);
+
+}
 
 #define threadIdx __cpucuda_threadIdx()
 #define blockIdx __cpucuda_blockIdx()

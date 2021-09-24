@@ -41,9 +41,9 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "detail/runtime.hpp"
+#include "cpucuda_detail/runtime.hpp"
 
-#include "detail/__cpucuda_internal_defs.h"
+#include "cpucuda_detail/__cpucuda_internal_defs.h"
 
 
 using cpucuda::dim3;
@@ -57,6 +57,7 @@ typedef int cudaLaunchParm;
 // Use a macro instead of a function with variadic template arguments
 // to avoid different properties of kernel template argument deduction
 // based on kernel arguments compared to AMDs implementation
+/*
 #define cudaLaunchKernelGGL(f, grid, block, shared_mem, stream, ...) \
 	_cpucuda_runtime.submit_kernel(grid, block, shared_mem, stream, f);
 
@@ -71,6 +72,7 @@ typedef int cudaLaunchParm;
 
 // TODO
 #define cudaLaunchKernelNoBarrier(f, grid, block, stream, ...)
+*/
 
 
 // TODO This dev() may be different if changed during kernel execution?

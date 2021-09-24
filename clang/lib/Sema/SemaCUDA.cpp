@@ -944,6 +944,9 @@ std::string Sema::getCudaConfigureFuncName() const {
     return getLangOpts().HIPUseNewLaunchAPI ? "__hipPushCallConfiguration"
                                             : "hipConfigureCall";
 
+  if (getLangOpts().CPUCUDA)
+    return "__cpucudaPushCallConfiguration";
+
   // New CUDA kernel launch sequence.
   if (CudaFeatureEnabled(Context.getTargetInfo().getSDKVersion(),
                          CudaFeature::CUDA_USES_NEW_LAUNCH))
