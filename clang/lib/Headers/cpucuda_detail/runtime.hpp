@@ -184,26 +184,16 @@ private:
 class device
 {
 public:
-  template<class Func>
+	template<class Func>
   void submit_kernel(stream& execution_stream,
                     dim3 grid, dim3 block, int shared_mem, Func f)
   {
-#ifdef CPUCUDA_NO_OPENMP
-    if(block.x * block.y * block.z > 1)
-      throw std::invalid_argument{"More than 1 thread per block requires compiling"
-                                  " cpucudaCPU with OpenMP support."};
-#endif
-
     execution_stream([=](){
       std::lock_guard<std::mutex> lock{this->_kernel_execution_mutex};
       _block_context = detail::kernel_block_context{block, shared_mem};
       _grid_context = detail::kernel_grid_context{grid};
 
-      // TODO will need different parallelisation strategy, possibly the
-      // original one for when the number of blocks is small
-#ifndef CPUCUDA_NO_OPENMP
 #pragma omp parallel for collapse(3)
-#endif
       for(size_t g_x = 0; g_x < grid.x; ++g_x){
         for(size_t g_y = 0; g_y < grid.y; ++g_y){
           for(size_t g_z = 0; g_z < grid.z; ++g_z){
@@ -280,11 +270,13 @@ public:
     return _block_context.get_dynamic_shared_mem();
   }
 
+public:
+	std::mutex _kernel_execution_mutex;
+
 private:
   detail::kernel_block_context _block_context;
   detail::kernel_grid_context _grid_context;
 
-  std::mutex _kernel_execution_mutex;
 };
 
 
@@ -390,10 +382,12 @@ public:
     this->dev().submit_kernel(*s, scratch_mem, f);
   }
 
+public:
+	detail::object_storage<stream> _streams;
+
 private:
   mutable std::mutex _runtime_lock;
 
-  detail::object_storage<stream> _streams;
   detail::object_storage<event> _events;
   // TODO: This should be thread local, but as long
   // as we are on the host system, we effectively

@@ -488,9 +488,20 @@ CodeGenFunction::EmitCXXOperatorMemberCallExpr(const CXXOperatorCallExpr *E,
       /*IsArrow=*/false, E->getArg(0));
 }
 
+RValue CodeGenFunction::EmitCPUCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
+                                                  ReturnValueSlot ReturnValue) {
+	EmitSimpleCallExpr(E->getConfig(), ReturnValue);
+	EmitSimpleCallExpr(E, ReturnValue);
+
+	return RValue::get(nullptr);
+}
+
 RValue CodeGenFunction::EmitCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
                                                ReturnValueSlot ReturnValue) {
-  return CGM.getCUDARuntime().EmitCUDAKernelCallExpr(*this, E, ReturnValue);
+	if (getLangOpts().CPUCUDA)
+		return EmitCPUCUDAKernelCallExpr(E, ReturnValue);
+	else
+    return CGM.getCUDARuntime().EmitCUDAKernelCallExpr(*this, E, ReturnValue);
 }
 
 static void EmitNullBaseClassInitialization(CodeGenFunction &CGF,

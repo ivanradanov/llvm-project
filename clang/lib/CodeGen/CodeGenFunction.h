@@ -4048,6 +4048,9 @@ public:
                                        ReturnValueSlot ReturnValue);
   RValue EmitCXXPseudoDestructorExpr(const CXXPseudoDestructorExpr *E);
 
+
+	RValue EmitCPUCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
+	                                 ReturnValueSlot ReturnValue);
   RValue EmitCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
                                 ReturnValueSlot ReturnValue);
 

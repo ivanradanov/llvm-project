@@ -4,9 +4,15 @@
 
 #include "types.hpp"
 
-using cpucuda::dim3;
+#define __constant__ __attribute__((constant))
+#define __global__ __attribute__((global))
+#define __shared__ __attribute__((shared))
+#define __device__ __attribute__((device))
+#define __host__ __attribute__((host))
 
-// TODO extern "C" these so that they don't get mangled
+#include "../cuda_runtime.h"
+
+using cpucuda::dim3;
 
 extern "C" {
 
@@ -20,6 +26,7 @@ extern "C" {
     return d.y;
   }
   unsigned __cpucuda_dim3_get_z(dim3 d) {
+
     return d.z;
   }
 
@@ -53,7 +60,30 @@ extern "C" {
   unsigned __cpucudaPushCallConfiguration(dim3 gridDim,
                                           dim3 blockDim,
                                           size_t sharedMem = 0,
-                                          struct CUstream_st *stream = 0);
+                                          cudaStream_t stream = 0);
+
+	void __cpucuda_placeholder_kernel(dim3 griddim, dim3 blockidx, dim3 blockdim, size_t sharedMem = 0);
+
+  void __cpucuda_submit_kernel(dim3 *_grid, dim3 *_block, int shared_mem, int stream)
+  {
+    dim3 grid = *_grid;
+    dim3 block = *_block;
+    auto execution_stream = _cpucuda_runtime._streams.get(stream);
+    (*execution_stream)([=](){
+		    std::lock_guard<std::mutex> lock{_cpucuda_runtime.dev()._kernel_execution_mutex};
+
+#pragma omp parallel for collapse(3)
+        for(size_t g_x = 0; g_x < grid.x; ++g_x){
+          for(size_t g_y = 0; g_y < grid.y; ++g_y){
+            for(size_t g_z = 0; g_z < grid.z; ++g_z){
+              dim3 block_idx = dim3{g_x, g_y, g_z};
+              __cpucuda_placeholder_kernel(grid, block_idx, block, shared_mem);
+            }
+          }
+        }
+      });
+  }
+
 
 }
 
@@ -62,11 +92,5 @@ extern "C" {
 #define blockDim __cpucuda_blockDim()
 #define gridDim __cpucuda_gridDim()
 #define __syncthreads __cpucuda_syncthreads
-
-#define __constant__ __attribute__((constant))
-#define __global__ __attribute__((global))
-#define __shared__ __attribute__((shared))
-#define __device__ __attribute__((device))
-#define __host__ __attribute__((host))
 
 #endif
