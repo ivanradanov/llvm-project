@@ -1508,6 +1508,10 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, LTOPreLink));
 
+  MPM.addPass(CPUCudaPass());
+
+  MPM.addPass(buildModuleOptimizationPipeline(Level, LTOPreLink));
+
   if (PGOOpt && PGOOpt->PseudoProbeForProfiling)
     MPM.addPass(PseudoProbeUpdatePass());
 

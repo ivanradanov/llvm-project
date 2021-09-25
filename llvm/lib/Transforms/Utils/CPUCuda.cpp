@@ -1568,6 +1568,7 @@ void CPUCudaPass::createCpucudaCallFunction() {
 
 }
 
+void CPUCudaPass::transformCallSites(Function *F) {}
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
