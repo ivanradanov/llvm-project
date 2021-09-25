@@ -177,10 +177,9 @@ public:
 
 }
 
-// TODO use proper function name mangling
 bool callIsBarrier(CallInst *callInst) {
   if (Function *calledFunction = callInst->getCalledFunction()) {
-    return calledFunction->getName().endswith("__cpucuda_syncthreadsv");
+    return calledFunction->getName() == "__cpucuda_syncthreads";
   } else {
     return false;
   }
@@ -1065,9 +1064,8 @@ void FunctionTransformer::replaceDim3Usages() {
       auto &instruction = *It;
       if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
         if (Function *calledFunction = callInst->getCalledFunction())
-          // TODO use proper function name mangling
           for (unsigned i = 0; i < Dim3Names.size(); ++i)
-            if (calledFunction->getName().endswith("__cpucuda_" + Dim3Names[i] + "v")) {
+            if (calledFunction->getName() == "__cpucuda_" + Dim3Names[i]) {
               auto Arg = F->getArg(i + Dim3ArgStartIndex);
               callInst->replaceAllUsesWith(Arg);
               It = callInst->eraseFromParent();
@@ -1149,12 +1147,12 @@ ValueVector FunctionTransformer::convertDim3ToArgs(Value *D, Instruction *After)
     for (auto &_I : BB) {
       Instruction *I = &_I;
       if (CallInst *Call = dyn_cast<CallInst>(I))
-        if (Call->getCalledFunction()->getName().contains("__cpucuda_declared_dim3_getter")) {
+        if (Call->getCalledFunction()->getName() == "__cpucuda_declared_dim3_getter") {
           VMap[I] = D;
           continue;
         }
       if (CallInst *Call = dyn_cast<CallInst>(I))
-        if (Call->getCalledFunction()->getName().contains("__cpucuda_declared_dim3_user")) {
+        if (Call->getCalledFunction()->getName() == "__cpucuda_declared_dim3_user") {
           ValueVector Args;
           for (unsigned i = 0; i < Call->getNumArgOperands(); ++i) {
             Args.push_back(VMap[Call->getArgOperand(i)]);
@@ -1395,20 +1393,20 @@ void FunctionTransformer::createDriverFunction() {
 
 }
 
+// TODO get the dim3 struct type from some other always included function
 Type *FunctionTransformer::getDim3StructType() {
   for (auto &F : *M)
     for (auto &bb : F)
       for (auto &instruction : bb)
         if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
           if (Function *calledFunction = callInst->getCalledFunction())
-            // TODO use proper function name mangling
             for (auto &name : Dim3Names)
-              if (calledFunction->getName().endswith("__cpucuda_" + name + "v"))
+              if (calledFunction->getName() == "__cpucuda_" + name)
                 return calledFunction->getReturnType();
   // Return any random type - this should never happen anyways because all
   // kernels should use some of the dim3 variables
   LLVM_DEBUG(dbgs() << "Could not find dim3 struct type from function " << F->getName() << "\n");
-  return LLVMBBIdType;
+  return nullptr;
 }
 
 // TODO fix this ugly hack.
@@ -1423,10 +1421,10 @@ Type *FunctionTransformer::getDim3StructType() {
 // because otherwise we will get an error about multiple definitions of the same
 // function when linking Alternatively, we can can change the name so that we
 // make sure it will be unique accross all modules of the program
-void assignToIfContains(Module *M, Function *&Assign, std::string String) {
+void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
   Assign = nullptr;
   for (auto &F : *M)
-    if (F.getName().contains(String)) {
+    if (F.getName() == String) {
       Assign = &F;
       break;
     }
@@ -1434,15 +1432,15 @@ void assignToIfContains(Module *M, Function *&Assign, std::string String) {
 }
 
 void FunctionTransformer::getDim3Fs() {
-  assignToIfContains(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
-  assignToIfContains(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
-  assignToIfContains(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
-  assignToIfContains(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
-  assignToIfContains(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
+  assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
+  assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
+  assignFunctionWithNameTo(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
+  assignFunctionWithNameTo(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
+  assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 
-  assignToIfContains(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
-  assignToIfContains(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
-  assignToIfContains(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
+  assignFunctionWithNameTo(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
+  assignFunctionWithNameTo(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
+  assignFunctionWithNameTo(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
 }
 
 void replaceFunctionUsages(Module *M, Function *Old, Function *New) {
@@ -1549,9 +1547,9 @@ void CPUCudaPass::cleanup(Module *M) {
   // This function exists only to make sure the above _real_ functions get
   // included in the llvm module - find out how to do this properly TODO
   Function *User;
-  assignToIfContains(M, User, "__cpucuda_real_func_user");
+  assignFunctionWithNameTo(M, User, "__cpucuda_real_func_user");
   User->eraseFromParent();
-  assignToIfContains(M, User, "__cpucuda_dim3_to_arg");
+  assignFunctionWithNameTo(M, User, "__cpucuda_dim3_to_arg");
   User->eraseFromParent();
   // TODO do we need to cleanup other stuff?
 
@@ -1562,7 +1560,7 @@ void CPUCudaPass::cleanup(Module *M) {
 }
 
 void CPUCudaPass::createCpucudaCallFunction() {
-  assignToIfContains(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
+  assignFunctionWithNameTo(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
 
   BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
 
