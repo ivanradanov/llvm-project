@@ -83,12 +83,13 @@ extern "C" {
   }
 	*/
 
-  void __cpucuda_call_kernel(const void* func,
-                             dim3 grid_dim,
-                             dim3 block_dim,
-                             dim3 block_idx,
-                             void** args,
-                             size_t shared_mem);
+  void __cpucuda_call_kernel(
+    const void* func,
+    dim3 grid_dim,
+    dim3 block_dim,
+    dim3 block_idx,
+    void** args,
+    size_t shared_mem);
 
   __host__ cudaError_t cudaLaunchKernel(const void* func,
                                         dim3 grid_dim,

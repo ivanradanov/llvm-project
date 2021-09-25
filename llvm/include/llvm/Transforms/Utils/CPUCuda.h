@@ -18,7 +18,18 @@
 
 namespace llvm {
 
+	class FunctionTransformer;
+
 	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
+	private:
+		Module *M;
+
+		std::map<Function *, FunctionTransformer *> FunctionTransformers;
+		Function *CpucudaCallKernelF;
+
+
+		void transformCallSites(Function *F);
+		void createCpucudaCallFunction();
 
 	public:
 		void cleanup(Module *M);

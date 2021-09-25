@@ -68,6 +68,8 @@ struct UsedValVars {
   InstSet usedSharedVars;
 };
 
+namespace llvm {
+
 class FunctionTransformer {
 public:
   struct {
@@ -172,6 +174,8 @@ public:
   FunctionTransformer(Module *M, Function *F);
 
 };
+
+}
 
 // TODO use proper function name mangling
 bool callIsBarrier(CallInst *callInst) {
@@ -311,9 +315,9 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
   Type *StructIndexType;
 
   TransformTerminator(SubkernelIdType SK, FunctionTransformer *Pass):
-    SK(SK),
-    C(Pass->M->getContext()),
-    Pass(Pass) {
+      SK(SK),
+      C(Pass->M->getContext()),
+      Pass(Pass) {
 
     StructIndexType = Type::getInt32Ty(C);
   }
@@ -730,7 +734,7 @@ public:
   std::unique_ptr<DominatorTree> DomTree;
 
   DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
-    SK(SK), Pass(Pass) {
+      SK(SK), Pass(Pass) {
 
     Function *OriginalF = Pass->SubkernelFs[SK];
 
@@ -789,9 +793,9 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
   // Make a new function which will be the subkernel
   FunctionType *nfty = FunctionType::get(
-    /* return type */ SubkernelReturnType,
-    /* params */ params,
-    /* isVarArg */ false);
+      /* return type */ SubkernelReturnType,
+      /* params */ params,
+      /* isVarArg */ false);
   Function *nf = Function::Create(nfty, F->getLinkage(), F->getAddressSpace(),
                                   F->getName(), F->getParent());
 
@@ -832,7 +836,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         continue;
 
       ConstantInt *Index = ConstantInt::get(
-        I32Type, getValIndexInCombinedDataType(SK, Val));
+          I32Type, getValIndexInCombinedDataType(SK, Val));
       Instruction *NextInst = Inst->getNextNonDebugInstruction();
       // If next inst is Phi, we have to get the first following non-phi
       // instruction because all Phi's must be bunched at the start of a BB
@@ -840,7 +844,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         NextInst = NextInst->getParent()->getFirstNonPHI();
       }
       GetElementPtrInst *Gep = GetElementPtrInst::Create(
-        getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
+          getCombinedDataType(), DataStructPtr, {Zero, Index}, "", NextInst);
       assert(NextInst && "The Inst must not be a terminator instruction so a next instruction has to exist");
       new StoreInst(Val, Gep, NextInst);
     }
@@ -871,9 +875,9 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         // The second argument of the function is the structure of usedVals
         Value *Val = (*I);
         ConstantInt *Index = ConstantInt::get(
-          GepIndexType, getValIndexInCombinedDataType(SK, Val));
+            GepIndexType, getValIndexInCombinedDataType(SK, Val));
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
-          getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
+            getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
         // If the used val is in the same subkernel replace only if the val does
         // not already dominate the use - this happens when a subkernel starts
@@ -900,10 +904,10 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
       for (unsigned i = 0; It != E; ++It, ++i) {
         Instruction *I = (*It);
         ConstantInt *Index = ConstantInt::get(
-          GepIndexType, IndexInCombinedSharedVarsDataType[SK][I]);
+            GepIndexType, IndexInCombinedSharedVarsDataType[SK][I]);
         // The third argument of the function is the structure of shared variables
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
-          SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
+            SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
         I->replaceAllUsesWith(Gep);
         Gep->takeName(I);
         I->eraseFromParent();
@@ -1121,11 +1125,11 @@ public:
 
     IncrBB = BasicBlock::Create(F->getContext(), "loop_incr" + IdxName, F);
     BinaryOperator *IncrIdx = BinaryOperator::Create(
-      Instruction::BinaryOps::Add,
-      ConstantInt::get(T->Dim3FieldType, 1),
-      Idx,
-      IdxName + "_incr",
-      IncrBB);
+        Instruction::BinaryOps::Add,
+        ConstantInt::get(T->Dim3FieldType, 1),
+        Idx,
+        IdxName + "_incr",
+        IncrBB);
     new StoreInst(IncrIdx, IdxPtr, IncrBB);
     BranchInst::Create(CondBB, IncrBB);
 
@@ -1222,22 +1226,22 @@ void FunctionTransformer::createDriverFunction() {
 
   ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, StaticSharedData);
   CallInst *BlockDimx = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
-    "blockDim_x", EntryBB);
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
+      "blockDim_x", EntryBB);
   Dim3Calls.push_back(BlockDimx);
   CallInst *BlockDimy = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
-    "blockDim_y", EntryBB);
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, Dim3Args,
+      "blockDim_y", EntryBB);
   Dim3Calls.push_back(BlockDimy);
   CallInst *BlockDimz = CallInst::Create(
-    Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
-    "blockDim_z", EntryBB);
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, Dim3Args,
+      "blockDim_z", EntryBB);
   Dim3Calls.push_back(BlockDimz);
 
   BinaryOperator *BlockSize = BinaryOperator::Create(
-    Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
+      Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
   BlockSize = BinaryOperator::Create(
-    Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
+      Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
 
   Instruction *PreservedData;
   if (Options.MallocPreservedDataArray) {
@@ -1249,13 +1253,13 @@ void FunctionTransformer::createDriverFunction() {
       MallocSize = ConstantExpr::getMul(StructSize, MaxCudaThreads);
     } else {
       MallocSize = BinaryOperator::Create(
-        Instruction::BinaryOps::Mul, BlockSize, StructSize, "blockSize", EntryBB);
+          Instruction::BinaryOps::Mul, BlockSize, StructSize, "blockSize", EntryBB);
     }
     Instruction *Malloc = CallInst::CreateMalloc(
-      static_cast<Instruction *>(StaticSharedData),
-      IntegerType::getInt32Ty(M->getContext()),
-      CombinedDataType,
-      MallocSize, nullptr, nullptr, "preserved_data");
+        static_cast<Instruction *>(StaticSharedData),
+        IntegerType::getInt32Ty(M->getContext()),
+        CombinedDataType,
+        MallocSize, nullptr, nullptr, "preserved_data");
     PreservedData = Malloc;
   } else {
     Value *Size = Options.DynamicPreservedDataArray ?
@@ -1272,13 +1276,13 @@ void FunctionTransformer::createDriverFunction() {
   AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
   GetElementPtrInst *SubkernelRetFromPtr = GetElementPtrInst::Create(
-    SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
+      SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
   SubkernelRetFromPtr->setName("from_ptr");
   new StoreInst(mOne, SubkernelRetFromPtr, EntryBB);
 
   ConstantInt *EntrySKConst = ConstantInt::get(I32Type, EntrySubkernel);
   GetElementPtrInst *SubkernelRetNextPtr = GetElementPtrInst::Create(
-    SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
+      SubkernelReturnType, SubkernelRetPtr, {Zero, One}, "", EntryBB);
   SubkernelRetNextPtr->setName("next_ptr");
   new StoreInst(EntrySKConst, SubkernelRetNextPtr, EntryBB);
 
@@ -1298,7 +1302,7 @@ void FunctionTransformer::createDriverFunction() {
     auto InsertSubkernelCall = [&](Value *PreservedDataIdx, BasicBlock *SubkernelCallBB,
                                    Value *ThreadIdxx, Value *ThreadIdxy, Value *ThreadIdxz) {
       GetElementPtrInst *ThreadPreservedData = GetElementPtrInst::Create(
-        CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
+          CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
 
       ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
       // original args + gridDim, blockIdx, blockDim
@@ -1307,13 +1311,13 @@ void FunctionTransformer::createDriverFunction() {
       }
       // threadIdx
       CallInst *ThreadIdx = CallInst::Create(
-        Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
-        {ThreadIdxx, ThreadIdxy, ThreadIdxz}, "threadIdx", SubkernelCallBB);
+          Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
+          {ThreadIdxx, ThreadIdxy, ThreadIdxz}, "threadIdx", SubkernelCallBB);
       Dim3Calls.push_back(ThreadIdx);
       Args.push_back(ThreadIdx);
       CallInst *SubkernelCall = CallInst::Create(
-        SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
-        Args, "local_ret", SubkernelCallBB);
+          SubkernelFs[SK]->getFunctionType(), SubkernelFs[SK],
+          Args, "local_ret", SubkernelCallBB);
       new StoreInst(SubkernelCall, SubkernelRetPtr, SubkernelCallBB);
 
       return SubkernelCall;
@@ -1327,15 +1331,15 @@ void FunctionTransformer::createDriverFunction() {
       BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
       auto ThreadIdxx = BinaryOperator::Create(
-        Instruction::BinaryOps::URem, LoopLin.Idx, BlockDimx, "threadIdx.x", SubkernelCallBB);
+          Instruction::BinaryOps::URem, LoopLin.Idx, BlockDimx, "threadIdx.x", SubkernelCallBB);
       auto Tmp = BinaryOperator::Create(
-        Instruction::BinaryOps::UDiv, LoopLin.Idx, BlockDimx, "rest", SubkernelCallBB);
+          Instruction::BinaryOps::UDiv, LoopLin.Idx, BlockDimx, "rest", SubkernelCallBB);
       auto ThreadIdxy = BinaryOperator::Create(
-        Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.y", SubkernelCallBB);
+          Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.y", SubkernelCallBB);
       Tmp = BinaryOperator::Create(
-        Instruction::BinaryOps::UDiv, Tmp, BlockDimy, "rest", SubkernelCallBB);
+          Instruction::BinaryOps::UDiv, Tmp, BlockDimy, "rest", SubkernelCallBB);
       auto ThreadIdxz = BinaryOperator::Create(
-        Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.z", SubkernelCallBB);
+          Instruction::BinaryOps::URem, Tmp, BlockDimy, "threadIdx.z", SubkernelCallBB);
 
       SubkernelCall = InsertSubkernelCall(LoopLin.Idx, SubkernelCallBB, ThreadIdxx, ThreadIdxy, ThreadIdxz);
 
@@ -1354,13 +1358,13 @@ void FunctionTransformer::createDriverFunction() {
       BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
       auto PreservedDataIdx = BinaryOperator::Create(
-        Instruction::BinaryOps::Mul, BlockDimy, Loopz.Idx, "threadPreservedDataIdx", SubkernelCallBB);
+          Instruction::BinaryOps::Mul, BlockDimy, Loopz.Idx, "threadPreservedDataIdx", SubkernelCallBB);
       PreservedDataIdx = BinaryOperator::Create(
-        Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+          Instruction::BinaryOps::Add, Loopy.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
       PreservedDataIdx = BinaryOperator::Create(
-        Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+          Instruction::BinaryOps::Mul, BlockDimx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
       PreservedDataIdx = BinaryOperator::Create(
-        Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
+          Instruction::BinaryOps::Add, Loopx.Idx, PreservedDataIdx, "threadPreservedDataIdx", SubkernelCallBB);
 
       SubkernelCall = InsertSubkernelCall(PreservedDataIdx, SubkernelCallBB, Loopx.Idx, Loopy.Idx, Loopz.Idx);
 
@@ -1470,14 +1474,14 @@ void FunctionTransformer::createWrapperFunction() {
 
   BasicBlock *EntryBB = BasicBlock::Create(WrapperF->getContext(), "entry", WrapperF);
   CallInst *GridDim = CallInst::Create(
-    Dim3Fs.RealGridDim->getFunctionType(), Dim3Fs.RealGridDim, {},
-    "gridDim", EntryBB);
+      Dim3Fs.RealGridDim->getFunctionType(), Dim3Fs.RealGridDim, {},
+      "gridDim", EntryBB);
   CallInst *BlockDim = CallInst::Create(
-    Dim3Fs.RealBlockDim->getFunctionType(), Dim3Fs.RealBlockDim, {},
-    "blockDim", EntryBB);
+      Dim3Fs.RealBlockDim->getFunctionType(), Dim3Fs.RealBlockDim, {},
+      "blockDim", EntryBB);
   CallInst *BlockIdx = CallInst::Create(
-    Dim3Fs.RealBlockIdx->getFunctionType(), Dim3Fs.RealBlockIdx, {},
-    "blockIdx", EntryBB);
+      Dim3Fs.RealBlockIdx->getFunctionType(), Dim3Fs.RealBlockIdx, {},
+      "blockIdx", EntryBB);
 
   ValueVector Args;
   for (auto &Arg : WrapperF->args()) {
@@ -1489,8 +1493,8 @@ void FunctionTransformer::createWrapperFunction() {
 
 
   CallInst *DriverCall = CallInst::Create(
-    DriverF->getFunctionType(), DriverF, Args,
-    "", EntryBB);
+      DriverF->getFunctionType(), DriverF, Args,
+      "", EntryBB);
 
   ReturnInst::Create(M->getContext(), EntryBB);
 
@@ -1531,14 +1535,17 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
 
   createDriverFunction();
 
-  createWrapperFunction();
-
-  cleanupFunctions();
+  // createWrapperFunction();
 
 }
 
 
 void CPUCudaPass::cleanup(Module *M) {
+
+  for (auto &Pair : FunctionTransformers) {
+    Pair.second->cleanupFunctions();
+  }
+
   // This function exists only to make sure the above _real_ functions get
   // included in the llvm module - find out how to do this properly TODO
   Function *User;
@@ -1547,10 +1554,25 @@ void CPUCudaPass::cleanup(Module *M) {
   assignToIfContains(M, User, "__cpucuda_dim3_to_arg");
   User->eraseFromParent();
   // TODO do we need to cleanup other stuff?
+
+  for (auto &Pair : FunctionTransformers) {
+    delete Pair.second;
+  }
+  FunctionTransformers = std::map<Function *, FunctionTransformer *>();
 }
+
+void CPUCudaPass::createCpucudaCallFunction() {
+  assignToIfContains(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
+
+  BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
+
+}
+
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
+  this->M = &M;
+
   vector<Function *> OriginalFs;
 
   // TODO Does this include function declarations without definitions? If so, we
@@ -1568,9 +1590,16 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
-    FunctionTransformer(&M, &F);
+    FunctionTransformers[&F] = new FunctionTransformer(&M, &F);
 
   }
+
+  createCpucudaCallFunction();
+
+  for (auto &Pair : FunctionTransformers) {
+    transformCallSites(Pair.first);
+  }
+
 
 
   cleanup(&M);
