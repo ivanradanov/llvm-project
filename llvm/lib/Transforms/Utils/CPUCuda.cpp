@@ -1562,8 +1562,60 @@ void CPUCudaPass::cleanup(Module *M) {
 void CPUCudaPass::createCpucudaCallFunction() {
   assignFunctionWithNameTo(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
 
-  BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
+  DataLayout *DL = new DataLayout(M);
+  auto PointerSizeInt = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
 
+  BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
+  /*
+  BasicBlock *ExitBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "exit", CpucudaCallKernelF);
+  ReturnInst::Create(M->getContext(), ExitBB);
+  */
+
+
+  auto KernelId = new PtrToIntInst(
+		  CpucudaCallKernelF->getArg(0),
+		  PointerSizeInt,
+		  "kernel_id", EntryBB);
+
+  /*
+  SwitchInst *Switch = SwitchInst::Create(CpucudaCallKernelF->getArg(0), ExitBB,
+                                          FunctionTransformers.size(), EntryBB);
+  */
+
+  BasicBlock *PrevCaseBB = EntryBB;
+  BasicBlock *CaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
+  BasicBlock *NextCaseBB;
+  for (auto &Pair : FunctionTransformers) {
+    auto FT = Pair.second;
+    auto DriverF = FT->DriverF;
+    auto OriginalF = FT->OriginalF;
+    auto CaseKernelId = new BitCastInst(DriverF, PointerSizeInt, "kernel_id_case", PrevCaseBB);
+    auto Cond = new ICmpInst(*PrevCaseBB, CmpInst::Predicate::ICMP_EQ, KernelId, CaseKernelId, "cond_eq");
+
+    NextCaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
+    BranchInst::Create(CaseBB, NextCaseBB, Cond, PrevCaseBB);
+
+    //Switch->addCase(CaseKernelId, CaseBB);
+    ValueVector CallArgs;
+    for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
+      ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
+      // TODO Arg position this will change with platform ABI
+      auto ArgsPtrArg = CpucudaCallKernelF->getArg(6);
+      auto ArgPtr = GetElementPtrInst::Create(ArgsPtrArg->getType(), ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
+      auto CastArgPtr = new BitCastInst(
+          ArgPtr,
+          PointerType::get(OriginalF->getArg(i)->getType(), CpucudaCallKernelF->getAddressSpace()),
+          "cast_cur_ptr", CaseBB);
+      auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
+      CallArgs.push_back(Arg);
+    }
+    CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "driver_call", CaseBB);
+
+    PrevCaseBB = CaseBB;
+    CaseBB = NextCaseBB;
+  }
+
+  ReturnInst::Create(M->getContext(), CaseBB);
 }
 
 void CPUCudaPass::transformCallSites(Function *F) {}
