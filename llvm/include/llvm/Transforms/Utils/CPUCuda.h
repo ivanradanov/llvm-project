@@ -28,7 +28,7 @@ namespace llvm {
 		Function *CpucudaCallKernelF;
 
 
-		void transformCallSites(Function *F);
+		void transformCallSites(int KernelIdx, Function *F);
 		void createCpucudaCallFunction();
 
 	public:

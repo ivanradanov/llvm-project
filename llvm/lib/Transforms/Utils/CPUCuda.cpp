@@ -1495,7 +1495,7 @@ void FunctionTransformer::createWrapperFunction() {
     LLVM_DEBUG(DriverCall->dump());
   }
 
-  OriginalF.replaceAllUsesWith(WrapperF);
+  OriginalF->replaceAllUsesWith(WrapperF);
 
   std::string NewName = std::string(OriginalF->getName()) + "_original";
   WrapperF->takeName(OriginalF);
@@ -1537,8 +1537,6 @@ void CPUCudaPass::cleanup(Module *M) {
   // This function exists only to make sure the above _real_ functions get
   // included in the llvm module - find out how to do this properly TODO
   Function *User;
-  assignFunctionWithNameTo(M, User, "__cpucuda_real_func_user");
-  User->eraseFromParent();
   assignFunctionWithNameTo(M, User, "__cpucuda_dim3_to_arg");
   User->eraseFromParent();
   // TODO do we need to cleanup other stuff?
@@ -1640,7 +1638,76 @@ void CPUCudaPass::createCpucudaCallFunction() {
   }
 }
 
-void CPUCudaPass::transformCallSites(Function *F) {
+void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
+  Function *PushF;
+  Function *LaunchKernelF;
+  assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
+  assignFunctionWithNameTo(M, LaunchKernelF, "cudaLaunchKernel");
+
+  for (User *U : F->users()) {
+    if (auto KernelCall = dyn_cast<CallInst>(U)) {
+      if (KernelCall->getCalledFunction() != F)
+        continue;
+      CallInst *PushCall;
+
+      PushCall = dyn_cast<CallInst>(KernelCall->getPrevNonDebugInstruction());
+      assert(PushCall && PushCall->getCalledFunction() == PushF);
+
+      auto AS = KernelCall->getParent()->getParent()->getAddressSpace();
+      auto Int8Ty = IntegerType::getInt8Ty(M->getContext());
+      auto Int8PtrTy = PointerType::get(Int8Ty, AS);
+      auto Int32Ty = IntegerType::getInt32Ty(M->getContext());
+
+      // TODO we are leaking memory...
+      Instruction *ArgArray = CallInst::CreateMalloc(
+          KernelCall,
+          Int32Ty,
+          PointerType::get(PointerType::get(Int8Ty, AS), AS),
+          ConstantInt::get(Int32Ty, KernelCall->getNumArgOperands() + 1),
+          nullptr, nullptr, "arg_array");
+      for (unsigned i = 0; i < KernelCall->getNumArgOperands(); ++i) {
+        auto ArgVal = KernelCall->getArgOperand(i);
+        auto ArgPtr = GetElementPtrInst::Create(
+            PointerType::get(Int8PtrTy, AS), ArgArray, {ConstantInt::get(Int32Ty, i)}, "arg_ptr", KernelCall);
+        auto CastArgPtr = new BitCastInst(
+            ArgPtr, PointerType::get(PointerType::get(ArgVal->getType(), AS), AS), "arg_ptr_bitcast", KernelCall);
+        DataLayout *DL = new DataLayout(M);
+        // TODO leaking here too ..
+        Instruction *ArgMalloc = CallInst::CreateMalloc(
+            KernelCall,
+            Int32Ty,
+            ArgVal->getType(),
+            ConstantInt::get(Int32Ty, DL->getTypeAllocSize(ArgVal->getType())),
+            nullptr, nullptr, "arg_malloc");
+        new StoreInst(ArgVal, ArgMalloc, KernelCall);
+        new StoreInst(ArgMalloc, CastArgPtr, KernelCall);
+      }
+      ValueVector Args;
+      Args.push_back(ConstantInt::get(dyn_cast<IntegerType>(LaunchKernelF->getArg(0)->getType()), KernelIdx));
+      int PushCallArgIdx = 0;
+      // grid dim
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      // block dim
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+
+      // void **args
+      LoadInst *ArgArrayL = new LoadInst(PointerType::get(Int8PtrTy, AS), ArgArray, "args", KernelCall);
+      Args.push_back(ArgArrayL);
+
+      // share mem size
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      // stream
+      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+
+      CallInst::Create(LaunchKernelF->getFunctionType(), LaunchKernelF, Args, "", KernelCall);
+
+      PushCall->eraseFromParent();
+      KernelCall->eraseFromParent();
+
+    }
+  }
 }
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
@@ -1670,9 +1737,12 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
   createCpucudaCallFunction();
 
+  int KernelIdx = 0;
   for (auto &Pair : FunctionTransformers) {
-    transformCallSites(Pair.first);
+    transformCallSites(KernelIdx++, Pair.first);
   }
+
+  // TODO we need to rename cudaLaunchKernel I think
 
   cleanup(&M);
 

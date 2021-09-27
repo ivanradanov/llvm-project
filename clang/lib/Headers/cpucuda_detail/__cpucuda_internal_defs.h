@@ -47,9 +47,9 @@ extern "C" {
   dim3 __cpucuda_gridDim();
   void __cpucuda_syncthreads();
 
-  dim3 __cpucuda_real_blockIdx();
-  dim3 __cpucuda_real_blockDim();
-  dim3 __cpucuda_real_gridDim();
+  dim3 __cpucuda_real_blockIdx() {}
+  dim3 __cpucuda_real_blockDim() {}
+  dim3 __cpucuda_real_gridDim() {}
 
 //#define __shared__ __attribute__((annotate("cpucuda_shared")))
 
@@ -117,12 +117,6 @@ extern "C" {
       });
 
 
-  }
-
-  void __cpucuda_real_func_user() {
-    __cpucuda_real_blockIdx();
-    __cpucuda_real_blockDim();
-    __cpucuda_real_gridDim();
   }
 
 }

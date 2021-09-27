@@ -332,7 +332,12 @@ cudaError_t cudaPeekAtLastError();
 */
 
 cudaError_t cudaDeviceReset();
-cudaError_t cudaGetLastError();
+// TODO impl
+cudaError_t cudaGetLastError()
+{
+  return cudaSuccess;
+}
+
 
 inline
 cudaError_t cudaMalloc(void** ptr, size_t size)
@@ -670,7 +675,10 @@ cudaError_t cudaDeviceSynchronize()
 
 cudaError_t cudaDeviceGetCacheConfig(cudaFuncCache_t* pCacheConfig);
 
-const char* cudaGetErrorString(cudaError_t error);
+// TODO impl
+const char* cudaGetErrorString(cudaError_t error) {
+  return "generic error message";
+}
 
 const char* cudaGetErrorName(cudaError_t error);
 
