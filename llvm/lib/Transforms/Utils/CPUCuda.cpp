@@ -34,6 +34,9 @@ using namespace llvm;
 // TODO split the pass in two parts - before and after replacing the dim3 getter
 // calls with arguments, and optimise the code in between
 
+// TODO I think we should be passing all dim3's around using pointers - it might
+// be the most ABI stable solution
+
 static const int MAX_CUDA_THREADS = 1024;
 
 using std::vector;
@@ -1443,19 +1446,6 @@ void FunctionTransformer::getDim3Fs() {
   assignFunctionWithNameTo(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
 }
 
-void replaceFunctionUsages(Module *M, Function *Old, Function *New) {
-  for (auto &F : *M) {
-    for (auto &BB : F) {
-      for (auto &I : BB) {
-        if (auto Call = dyn_cast<CallBase>(&I)) {
-          if (Call->getCalledFunction() == Old)
-            Call->setCalledFunction(New);
-        }
-      }
-    }
-  }
-}
-
 void FunctionTransformer::createWrapperFunction() {
   auto NewF = Function::Create(OriginalF->getFunctionType(), OriginalF->getLinkage(), OriginalF->getAddressSpace(),
                                OriginalF->getName(), OriginalF->getParent());
@@ -1505,7 +1495,7 @@ void FunctionTransformer::createWrapperFunction() {
     LLVM_DEBUG(DriverCall->dump());
   }
 
-  replaceFunctionUsages(M, OriginalF, WrapperF);
+  OriginalF.replaceAllUsesWith(WrapperF);
 
   std::string NewName = std::string(OriginalF->getName()) + "_original";
   WrapperF->takeName(OriginalF);
@@ -1562,63 +1552,96 @@ void CPUCudaPass::cleanup(Module *M) {
 void CPUCudaPass::createCpucudaCallFunction() {
   assignFunctionWithNameTo(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
 
+  Function *ArgsToDim3F;
+  assignFunctionWithNameTo(M, ArgsToDim3F, "__cpucuda_coerced_args_to_dim3");
+
+  /*
   DataLayout *DL = new DataLayout(M);
-  auto PointerSizeInt = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
+  auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
+  */
+  IntegerType *KernelIdTy = dyn_cast<IntegerType>(CpucudaCallKernelF->getArg(0)->getType());
+  assert(KernelIdTy);
 
   BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
-  /*
   BasicBlock *ExitBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "exit", CpucudaCallKernelF);
   ReturnInst::Create(M->getContext(), ExitBB);
-  */
 
 
+  // Arg 0 is the kernel we are calling
+  /*
   auto KernelId = new PtrToIntInst(
 		  CpucudaCallKernelF->getArg(0),
-		  PointerSizeInt,
+		  KernelIdTy,
 		  "kernel_id", EntryBB);
-
-  /*
-  SwitchInst *Switch = SwitchInst::Create(CpucudaCallKernelF->getArg(0), ExitBB,
-                                          FunctionTransformers.size(), EntryBB);
   */
+  auto KernelId = CpucudaCallKernelF->getArg(0);
 
-  BasicBlock *PrevCaseBB = EntryBB;
-  BasicBlock *CaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
-  BasicBlock *NextCaseBB;
+  SwitchInst *Switch = SwitchInst::Create(KernelId, ExitBB,
+                                          FunctionTransformers.size(), EntryBB);
+
+  int _CaseKernelId = 0;
   for (auto &Pair : FunctionTransformers) {
     auto FT = Pair.second;
     auto DriverF = FT->DriverF;
     auto OriginalF = FT->OriginalF;
-    auto CaseKernelId = new BitCastInst(DriverF, PointerSizeInt, "kernel_id_case", PrevCaseBB);
-    auto Cond = new ICmpInst(*PrevCaseBB, CmpInst::Predicate::ICMP_EQ, KernelId, CaseKernelId, "cond_eq");
+    //auto CaseKernelId = dyn_cast<ConstantInt>(ConstantExpr::getBitCast(DriverF, KernelIdTy));
+    auto CaseKernelId = ConstantInt::get(KernelIdTy, _CaseKernelId);
 
-    NextCaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
-    BranchInst::Create(CaseBB, NextCaseBB, Cond, PrevCaseBB);
 
-    //Switch->addCase(CaseKernelId, CaseBB);
+    BasicBlock *CaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
+    Switch->addCase(CaseKernelId, CaseBB);
+
     ValueVector CallArgs;
     for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
       ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
-      // TODO Arg position this will change with platform ABI
+      // TODO Arg position will change with platform ABI
       auto ArgsPtrArg = CpucudaCallKernelF->getArg(6);
-      auto ArgPtr = GetElementPtrInst::Create(ArgsPtrArg->getType(), ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
+      auto ArgPtr = GetElementPtrInst::Create(
+          dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType(),
+          ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
       auto CastArgPtr = new BitCastInst(
           ArgPtr,
           PointerType::get(OriginalF->getArg(i)->getType(), CpucudaCallKernelF->getAddressSpace()),
           "cast_cur_ptr", CaseBB);
       auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
       CallArgs.push_back(Arg);
+
+      _CaseKernelId++;
     }
-    CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "driver_call", CaseBB);
+    // TODO This will change with platform ABI
+    // The first two dim3's get passed coalesced, the third one byval
+    vector<CallInst *> ToDim3Calls;
+    int ArgIdx = 1;
+    for (int Dim3Idx = 0; Dim3Idx < 2; Dim3Idx++) {
+	    ValueVector Dim3FArgs;
+	    for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
+		    Dim3FArgs.push_back(CpucudaCallKernelF->getArg(ArgIdx++));
+	    }
+	    auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", CaseBB);
+      CallArgs.push_back(ToDim3);
+      ToDim3Calls.push_back(ToDim3);
+    }
 
-    PrevCaseBB = CaseBB;
-    CaseBB = NextCaseBB;
+    auto LastDim3Arg = CpucudaCallKernelF->getArg(ArgIdx++);
+    auto ToDim3 = new BitCastInst(
+		    LastDim3Arg,
+		    PointerType::get(FT->Dim3Type, CpucudaCallKernelF->getAddressSpace()), "bitcast_dim3_arg", CaseBB);
+    Value *LastDim3 = new LoadInst(FT->Dim3Type, ToDim3, "dim3", CaseBB);
+    CallArgs.push_back(LastDim3);
+
+    CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", CaseBB);
+    BranchInst::Create(ExitBB, CaseBB);
+
+    for (auto &F : ToDim3Calls) {
+      InlineFunctionInfo IFI;
+      InlineResult IR = InlineFunction(*F, IFI);
+      assert(IR.isSuccess() && "Has to be inlined");
+    }
   }
-
-  ReturnInst::Create(M->getContext(), CaseBB);
 }
 
-void CPUCudaPass::transformCallSites(Function *F) {}
+void CPUCudaPass::transformCallSites(Function *F) {
+}
 
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
@@ -1650,8 +1673,6 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   for (auto &Pair : FunctionTransformers) {
     transformCallSites(Pair.first);
   }
-
-
 
   cleanup(&M);
 

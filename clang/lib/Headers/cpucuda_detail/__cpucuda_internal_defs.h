@@ -59,7 +59,7 @@ extern "C" {
                                           size_t sharedMem = 0,
                                           cudaStream_t stream = 0);
 
-  /*
+	/*
   void __cpucuda_placeholder_kernel(dim3 griddim, dim3 blockidx, dim3 blockdim, size_t sharedMem = 0);
 
   void __cpucuda_submit_kernel(dim3 *_grid, dim3 *_block, int shared_mem, int stream)
@@ -84,19 +84,22 @@ extern "C" {
 	*/
 
   void __cpucuda_call_kernel(
-    const void* func,
-    dim3 grid_dim,
-    dim3 block_dim,
-    dim3 block_idx,
-    void** args,
-    size_t shared_mem);
+      //const void* func,
+		  int func,
+      dim3 grid_dim,
+      dim3 block_dim,
+      dim3 block_idx,
+      void** args,
+      size_t shared_mem);
 
-  __host__ cudaError_t cudaLaunchKernel(const void* func,
-                                        dim3 grid_dim,
-                                        dim3 block_dim,
-                                        void** args,
-                                        size_t shared_mem,
-                                        cudaStream_t stream)
+  __host__ cudaError_t cudaLaunchKernel(
+		  //const void* func,
+		  int func,
+      dim3 grid_dim,
+      dim3 block_dim,
+      void** args,
+      size_t shared_mem,
+      cudaStream_t stream)
   {
     auto execution_stream = _cpucuda_runtime._streams.get(stream);
     (*execution_stream)([=](){
