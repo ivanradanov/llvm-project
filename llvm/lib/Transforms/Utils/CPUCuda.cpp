@@ -1095,6 +1095,8 @@ void FunctionTransformer::createSubkernels() {
   }
 }
 
+// TODO we have to put the alloca in the entry block or put lifetimes for it
+// because currently for each loop execution we allocate more memory
 class ThreadIdxLoop {
 public:
   FunctionTransformer *T;
@@ -1594,11 +1596,14 @@ void CPUCudaPass::createCpucudaCallFunction() {
       ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
       // TODO Arg position will change with platform ABI
       auto ArgsPtrArg = CpucudaCallKernelF->getArg(6);
+      auto SinglePtrTy = dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType();
       auto ArgPtr = GetElementPtrInst::Create(
-          dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType(),
+		      SinglePtrTy,
           ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
+      auto ArgPtrLoad = new LoadInst(
+		      SinglePtrTy, ArgPtr, "cur_ptr", CaseBB);
       auto CastArgPtr = new BitCastInst(
-          ArgPtr,
+		      ArgPtrLoad,
           PointerType::get(OriginalF->getArg(i)->getType(), CpucudaCallKernelF->getAddressSpace()),
           "cast_cur_ptr", CaseBB);
       auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
@@ -1621,11 +1626,17 @@ void CPUCudaPass::createCpucudaCallFunction() {
     }
 
     auto LastDim3Arg = CpucudaCallKernelF->getArg(ArgIdx++);
+    Function *PtrToDim3F;
+    assignFunctionWithNameTo(M, PtrToDim3F, "__cpucuda_dim3ptr_to_dim3");
+    auto ToDim3 = CallInst::Create(PtrToDim3F->getFunctionType(), PtrToDim3F, LastDim3Arg, "dim3", CaseBB);
+    /*
     auto ToDim3 = new BitCastInst(
 		    LastDim3Arg,
 		    PointerType::get(FT->Dim3Type, CpucudaCallKernelF->getAddressSpace()), "bitcast_dim3_arg", CaseBB);
     Value *LastDim3 = new LoadInst(FT->Dim3Type, ToDim3, "dim3", CaseBB);
-    CallArgs.push_back(LastDim3);
+    */
+    ToDim3Calls.push_back(ToDim3);
+    CallArgs.push_back(ToDim3);
 
     CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", CaseBB);
     BranchInst::Create(ExitBB, CaseBB);
@@ -1643,6 +1654,8 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
   Function *LaunchKernelF;
   assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
   assignFunctionWithNameTo(M, LaunchKernelF, "cudaLaunchKernel");
+
+  DataLayout *DL = new DataLayout(M);
 
   for (User *U : F->users()) {
     if (auto KernelCall = dyn_cast<CallInst>(U)) {
@@ -1662,13 +1675,14 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
       Instruction *ArgArray = CallInst::CreateMalloc(
           KernelCall,
           Int32Ty,
-          PointerType::get(PointerType::get(Int8Ty, AS), AS),
-          ConstantInt::get(Int32Ty, KernelCall->getNumArgOperands() + 1),
+          Int8PtrTy,
+          //PointerType::get(PointerType::get(Int8Ty, AS), AS),
+          ConstantInt::get(Int32Ty, DL->getMaxPointerSizeInBits() * (KernelCall->getNumArgOperands() + 1)),
           nullptr, nullptr, "arg_array");
       for (unsigned i = 0; i < KernelCall->getNumArgOperands(); ++i) {
         auto ArgVal = KernelCall->getArgOperand(i);
         auto ArgPtr = GetElementPtrInst::Create(
-            PointerType::get(Int8PtrTy, AS), ArgArray, {ConstantInt::get(Int32Ty, i)}, "arg_ptr", KernelCall);
+            Int8PtrTy, ArgArray, {ConstantInt::get(Int32Ty, i)}, "arg_ptr", KernelCall);
         auto CastArgPtr = new BitCastInst(
             ArgPtr, PointerType::get(PointerType::get(ArgVal->getType(), AS), AS), "arg_ptr_bitcast", KernelCall);
         DataLayout *DL = new DataLayout(M);
@@ -1693,8 +1707,8 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
       Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
 
       // void **args
-      LoadInst *ArgArrayL = new LoadInst(PointerType::get(Int8PtrTy, AS), ArgArray, "args", KernelCall);
-      Args.push_back(ArgArrayL);
+      //LoadInst *ArgArrayL = new LoadInst(PointerType::get(Int8PtrTy, AS), ArgArray, "args", KernelCall);
+      Args.push_back(ArgArray);
 
       // share mem size
       Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
