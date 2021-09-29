@@ -107,35 +107,35 @@ extern "C" {
       size_t shared_mem,
       cudaStream_t stream)
   {
-	  printf("cudaLaunchKernel %i,  %u, %u, %u,  %u, %u, %u,  %p,  %zi,  %i\n",
-	         func, grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z, args, shared_mem, stream);
-	  /*
+    printf("cudaLaunchKernel %i,  %u, %u, %u,  %u, %u, %u,  %p,  %zi,  %i\n",
+           func, grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z, args, shared_mem, stream);
     auto execution_stream = _cpucuda_runtime._streams.get(stream);
     (*execution_stream)([=](){
         std::lock_guard<std::mutex> lock{_cpucuda_runtime.dev()._kernel_execution_mutex};
-	  */
 
-	  /*
-        printf("in stream %i,  %u, %u, %u,  %u, %u, %u,  %p,  %zi,  %i\n",
-               func, grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z, args, shared_mem, stream);
+        /*
+          printf("in stream %i,  %u, %u, %u,  %u, %u, %u,  %p,  %zi,  %i\n",
+          func, grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z, args, shared_mem, stream);
 
-        printf("args: %p %p %p %i\n", *((float **)args[0]),*((float **)args[1]),*((float **)args[2]),*((int *)args[3]));
-	  */
+          printf("args: %p %p %p %i\n", *((float **)args[0]),*((float **)args[1]),*((float **)args[2]),*((int *)args[3]));
+        */
 
-        //#pragma omp parallel for collapse(3)
-        for(size_t g_x = 0; g_x < grid_dim.x; ++g_x){
-          for(size_t g_y = 0; g_y < grid_dim.y; ++g_y){
-            for(size_t g_z = 0; g_z < grid_dim.z; ++g_z){
+        #pragma omp parallel for collapse(3)
+        for(unsigned g_z = 0; g_z < grid_dim.z; ++g_z){
+          //printf("g_z %u < %u\n", g_z, grid_dim.z);
+          for(unsigned g_y = 0; g_y < grid_dim.y; ++g_y){
+            //printf("g_y %u < %u\n", g_y, grid_dim.y);
+            for(unsigned g_x = 0; g_x < grid_dim.x; ++g_x){
+              //printf("g_x %u < %u\n", g_x, grid_dim.x);
               dim3 block_idx = dim3{g_x, g_y, g_z};
-              /*printf("in stream %i,  %u, %u, %u\n",
-                func, block_idx.x, block_idx.y, block_idx.z);*/
+              //printf("in stream %i,  %u, %u, %u\n",
+              //func, block_idx.x, block_idx.y, block_idx.z);
               __cpucuda_call_kernel(func, grid_dim, block_idx, block_dim, args, shared_mem);
             }
           }
         }
-        /*
       });
-        */
+    return cudaSuccess;
   }
 
 }
