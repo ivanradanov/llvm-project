@@ -1661,10 +1661,15 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
     if (auto KernelCall = dyn_cast<CallInst>(U)) {
       if (KernelCall->getCalledFunction() != F)
         continue;
-      CallInst *PushCall;
 
-      PushCall = dyn_cast<CallInst>(KernelCall->getPrevNonDebugInstruction());
-      assert(PushCall && PushCall->getCalledFunction() == PushF);
+      CallInst *PushCall;
+      Instruction *PrevInst = KernelCall;
+      while (true) {
+        PrevInst = PrevInst->getPrevNonDebugInstruction();
+        PushCall = dyn_cast<CallInst>(PrevInst);
+        if (PushCall && PushCall->getCalledFunction() == PushF)
+          break;
+      }
 
       auto AS = KernelCall->getParent()->getParent()->getAddressSpace();
       auto Int8Ty = IntegerType::getInt8Ty(M->getContext());
