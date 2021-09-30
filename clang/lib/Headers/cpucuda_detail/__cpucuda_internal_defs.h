@@ -65,30 +65,6 @@ extern "C" {
                                           size_t sharedMem = 0,
                                           cudaStream_t stream = 0);
 
-	/*
-  void __cpucuda_placeholder_kernel(dim3 griddim, dim3 blockidx, dim3 blockdim, size_t sharedMem = 0);
-
-  void __cpucuda_submit_kernel(dim3 *_grid, dim3 *_block, int shared_mem, int stream)
-  {
-    dim3 grid = *_grid;
-    dim3 block = *_block;
-    auto execution_stream = _cpucuda_runtime._streams.get(stream);
-    (*execution_stream)([=](){
-        std::lock_guard<std::mutex> lock{_cpucuda_runtime.dev()._kernel_execution_mutex};
-
-#pragma omp parallel for collapse(3)
-        for(size_t g_x = 0; g_x < grid.x; ++g_x){
-          for(size_t g_y = 0; g_y < grid.y; ++g_y){
-            for(size_t g_z = 0; g_z < grid.z; ++g_z){
-              dim3 block_idx = dim3{g_x, g_y, g_z};
-              __cpucuda_placeholder_kernel(grid, block_idx, block, shared_mem);
-            }
-          }
-        }
-      });
-  }
-	*/
-
   void __cpucuda_call_kernel(
       //const void* func,
 		  int func,
@@ -98,7 +74,7 @@ extern "C" {
       void** args,
       size_t shared_mem);
 
-  __host__ cudaError_t cudaLaunchKernel(
+  __host__ cudaError_t __cpucudaLaunchKernel(
 		  //const void* func,
 		  int func,
       dim3 grid_dim,

@@ -1246,6 +1246,7 @@ void FunctionTransformer::createDriverFunction() {
   BlockSize = BinaryOperator::Create(
       Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
 
+  // TODO we are leaking the malloc'd memory, free it in the exit block...
   Instruction *PreservedData;
   if (Options.MallocPreservedDataArray) {
     Value *MallocSize;
@@ -1653,7 +1654,7 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
   Function *PushF;
   Function *LaunchKernelF;
   assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
-  assignFunctionWithNameTo(M, LaunchKernelF, "cudaLaunchKernel");
+  assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernel");
 
   DataLayout *DL = new DataLayout(M);
 
