@@ -120,7 +120,7 @@ enum cudaTextureReadMode {};
 #define cudaReadModeNormalizedFloat 0
 
 template<class T, int dim, cudaTextureReadMode readMode>
-struct texture 
+struct texture
 {};
 
 typedef enum cudaChannelFormatKind {
@@ -352,38 +352,89 @@ struct cudaDeviceArch_t
   unsigned hasDynamicParallelism    : 1;
 };
 
-struct cudaDeviceProp_t
+struct cudaDeviceProp
 {
   char name[256];
+	//cudaUUID_t uuid;
+  char luid[8];
+  unsigned int luidDeviceNodeMask;
   size_t totalGlobalMem;
   size_t sharedMemPerBlock;
   int regsPerBlock;
   int warpSize;
+  size_t memPitch;
   int maxThreadsPerBlock;
   int maxThreadsDim[3];
   int maxGridSize[3];
   int clockRate;
-  int memoryClockRate;
-  int memoryBusWidth;
   size_t totalConstMem;
   int major;
   int minor;
+  size_t textureAlignment;
+  size_t texturePitchAlignment;
+  int deviceOverlap;
   int multiProcessorCount;
-  int l2CacheSize;
-  int maxThreadsPerMultiProcessor;
+  int kernelExecTimeoutEnabled;
+  int integrated;
+  int canMapHostMemory;
   int computeMode;
-  int clockInstructionRate;
-  cudaDeviceArch_t arch;
+  int maxTexture1D;
+  int maxTexture1DMipmap;
+  int maxTexture1DLinear;
+  int maxTexture2D[2];
+  int maxTexture2DMipmap[2];
+  int maxTexture2DLinear[3];
+  int maxTexture2DGather[2];
+  int maxTexture3D[3];
+  int maxTexture3DAlt[3];
+  int maxTextureCubemap;
+  int maxTexture1DLayered[2];
+  int maxTexture2DLayered[3];
+  int maxTextureCubemapLayered[2];
+  int maxSurface1D;
+  int maxSurface2D[2];
+  int maxSurface3D[3];
+  int maxSurface1DLayered[2];
+  int maxSurface2DLayered[3];
+  int maxSurfaceCubemap;
+  int maxSurfaceCubemapLayered[2];
+  size_t surfaceAlignment;
   int concurrentKernels;
+  int ECCEnabled;
   int pciBusID;
   int pciDeviceID;
-  size_t maxSharedMemoryPerMultiProcessor;
+  int pciDomainID;
+  int tccDriver;
+  int asyncEngineCount;
+  int unifiedAddressing;
+  int memoryClockRate;
+  int memoryBusWidth;
+  int l2CacheSize;
+  int persistingL2CacheMaxSize;
+  int maxThreadsPerMultiProcessor;
+  int streamPrioritiesSupported;
+  int globalL1CacheSupported;
+  int localL1CacheSupported;
+  size_t sharedMemPerMultiprocessor;
+  int regsPerMultiprocessor;
+  int managedMemory;
   int isMultiGpuBoard;
-  int canMapHostMemory;
-  int gcnArch;
-  int ECCEnabled;
+  int multiGpuBoardGroupID;
+  int hostNativeAtomicSupported;
+  int singleToDoublePrecisionPerfRatio;
+  int pageableMemoryAccess;
+  int concurrentManagedAccess;
+  int computePreemptionSupported;
+  int canUseHostPointerForRegisteredMem;
+  int cooperativeLaunch;
+  int cooperativeMultiDeviceLaunch;
+  size_t sharedMemPerBlockOptin;
+  int pageableMemoryAccessUsesHostPageTables;
+  int directManagedMemAccessFromHost;
+  int maxBlocksPerMultiProcessor;
+  int accessPolicyMaxWindowSize;
+  size_t reservedSharedMemPerBlock;
 };
-
 
 struct cudaMemcpy3DParms {};
 enum cudaDeviceAttr
@@ -611,7 +662,7 @@ cudaError_t cudaSetDevice(int device)
   return cudaSuccess;
 }
 
-//cudaError_t cudaChooseDevice(int* device, const cudaDeviceProp_t* prop);
+//cudaError_t cudaChooseDevice(int* device, const cudaDeviceProp* prop);
 inline
 cudaError_t cudaStreamCreate(cudaStream_t* stream)
 {
@@ -625,7 +676,7 @@ cudaError_t cudaStreamCreateWithFlags(cudaStream_t* stream, unsigned int flags)
 {
   if(flags == cudaStreamDefault)
     return cudaStreamCreate(stream);
-  else if (flags == cudaStreamNonBlocking) 
+  else if (flags == cudaStreamNonBlocking)
   {
     *stream = _cpucuda_runtime.create_async_stream();
     return cudaSuccess;
@@ -665,7 +716,7 @@ inline
 cudaError_t cudaStreamQuery(cudaStream_t stream)
 {
   cpucuda::stream* s = _cpucuda_runtime.streams().get(stream);
-  
+
   if(s->is_idle())
     return cudaSuccess;
 
@@ -676,7 +727,7 @@ cudaError_t cudaStreamQuery(cudaStream_t stream)
 inline
 cudaError_t cudaStreamAddCallback(cudaStream_t stream,
                                 cudaStreamCallback_t callback, void *userData,
-                                unsigned int flags) 
+                                unsigned int flags)
 {
   _cpucuda_runtime.submit_operation([stream, callback, userData](){
     // TODO guarantee correct error propagation
@@ -764,7 +815,7 @@ cudaError_t cudaMemcpyFromSymbolAsync(void* dst, const void* symbolName,
                                     cudaMemcpyKind kind,
                                     cudaStream_t stream = 0)
 {
-  const void* ptr = 
+  const void* ptr =
     static_cast<const void*>(static_cast<const char*>(symbolName)+offset);
   return cudaMemcpyAsync(dst, ptr, sizeBytes, kind, stream);
 }
@@ -774,7 +825,7 @@ cudaError_t cudaMemcpyToSymbol(const void* symbol, const void* src, size_t sizeB
                             size_t offset = 0,
                             cudaMemcpyKind copyType = cudaMemcpyHostToDevice)
 {
-  cudaError_t err = 
+  cudaError_t err =
     cudaMemcpyToSymbolAsync(symbol, src, sizeBytes, offset, copyType, 0);
 
   if(err != cudaSuccess)
@@ -787,11 +838,11 @@ cudaError_t cudaMemcpyToSymbol(const void* symbol, const void* src, size_t sizeB
 inline
 cudaError_t cudaMemcpyFromSymbol(void *dst, const void *symbolName,
                                size_t sizeBytes, size_t offset = 0,
-                               cudaMemcpyKind kind = cudaMemcpyDeviceToHost) 
+                               cudaMemcpyKind kind = cudaMemcpyDeviceToHost)
 {
-  cudaError_t err = 
+  cudaError_t err =
     cudaMemcpyFromSymbolAsync(dst, symbolName, sizeBytes, offset, kind, 0);
-    
+
   if(err != cudaSuccess)
     return err;
 
@@ -819,7 +870,7 @@ cudaError_t cudaMemcpy2DAsync(void* dst, size_t dpitch, const void* src, size_t 
       memcpy(row_dst_begin, row_src_begin, width);
     }
   }, stream);
-  
+
   return cudaSuccess;
 }
 
@@ -904,7 +955,7 @@ cudaError_t cudaMemsetAsync(void* devPtr, int value, size_t count,
 {
   if(!_cpucuda_runtime.streams().is_valid(stream))
     return cudaErrorInvalidValue;
-  
+
   _cpucuda_runtime.submit_operation([=](){
     memset(devPtr, value, count);
   }, stream);
@@ -940,7 +991,7 @@ cudaError_t cudaMemset3DAsync(cudaPitchedPtr pitchedDevPtr, int  value, cudaExte
 */
 
 inline
-cudaError_t cudaGetDeviceProperties(cudaDeviceProp_t* p_prop, int device)
+cudaError_t cudaGetDeviceProperties(cudaDeviceProp* p_prop, int device)
 {
   if(device != 0)
     return cudaErrorInvalidDevice;
@@ -976,7 +1027,7 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp_t* p_prop, int device)
   p_prop->l2CacheSize = std::numeric_limits<int>::max();
   p_prop->maxThreadsPerMultiProcessor = p_prop->maxThreadsPerBlock;
   p_prop->computeMode = 0;
-  p_prop->clockInstructionRate = p_prop->clockRate;
+  //p_prop->clockInstructionRate = p_prop->clockRate;
 
   cudaDeviceArch_t arch;
   arch.hasGlobalInt32Atomics = 1;
@@ -997,15 +1048,15 @@ cudaError_t cudaGetDeviceProperties(cudaDeviceProp_t* p_prop, int device)
   arch.has3dGrid = 1;
   arch.hasDynamicParallelism = 0;
 
-  p_prop->arch = arch;
+  //p_prop->arch = arch;
   p_prop->concurrentKernels = 1;
   p_prop->pciBusID = 0;
   p_prop->pciDeviceID = 0;
-  p_prop->maxSharedMemoryPerMultiProcessor = p_prop->sharedMemPerBlock;
+  //p_prop->maxSharedMemoryPerMultiProcessor = p_prop->sharedMemPerBlock;
   p_prop->isMultiGpuBoard = 0;
   p_prop->canMapHostMemory = 1;
-  p_prop->gcnArch = 0;
-  
+  //p_prop->gcnArch = 0;
+
   return cudaSuccess;
 }
 

@@ -107,8 +107,10 @@ extern "C" {
       size_t shared_mem,
       cudaStream_t stream)
   {
+	  /*
     printf("cudaLaunchKernel %i,  %u, %u, %u,  %u, %u, %u,  %p,  %zi,  %i\n",
            func, grid_dim.x, grid_dim.y, grid_dim.z, block_dim.x, block_dim.y, block_dim.z, args, shared_mem, stream);
+	  */
     auto execution_stream = _cpucuda_runtime._streams.get(stream);
     (*execution_stream)([=](){
         std::lock_guard<std::mutex> lock{_cpucuda_runtime.dev()._kernel_execution_mutex};
