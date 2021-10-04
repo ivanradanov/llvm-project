@@ -3196,8 +3196,8 @@ void CompilerInvocation::setLangDefaults(LangOptions &Opts, InputKind IK,
   }
 
   Opts.HIP = IK.getLanguage() == Language::HIP;
-  Opts.CUDA = IK.getLanguage() == Language::CUDA || Opts.HIP;
   Opts.CPUCUDA = IK.getLanguage() == Language::CPUCUDA;
+  Opts.CUDA = IK.getLanguage() == Language::CUDA || Opts.HIP || Opts.CPUCUDA;
   if (Opts.HIP) {
     // HIP toolchain does not support 'Fast' FPOpFusion in backends since it
     // fuses multiplication/addition instructions without contract flag from
