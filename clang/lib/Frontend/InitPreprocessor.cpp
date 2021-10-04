@@ -492,6 +492,10 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
     Builder.defineMacro("__ASSEMBLER__");
   if (LangOpts.CUDA && !LangOpts.HIP)
     Builder.defineMacro("__CUDA__");
+  if (LangOpts.CPUCUDA) {
+    Builder.defineMacro("__CUDA__");
+    Builder.defineMacro("__CPUCUDA__");
+  }
   if (LangOpts.HIP) {
     Builder.defineMacro("__HIP__");
     Builder.defineMacro("__HIPCC__");

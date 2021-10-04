@@ -142,6 +142,7 @@ public:
   IntegerType *I32Type;
   IntegerType *Dim3FieldType;
   Type *Dim3Type;
+  Type *Dim3PtrType;
 
   void splitBlocksAroundBarriers(Function &F);
   bool blockIsAfterBarrier(BasicBlock *BB);
@@ -168,7 +169,7 @@ public:
   bool isSharedVar(Instruction &I);
   void createDriverFunction();
   void replaceDim3Usages();
-  Type *getDim3StructType();
+  void getDim3StructType();
   void getDim3Fs();
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
   void cleanupFunctions();
@@ -178,6 +179,28 @@ public:
 
 };
 
+}
+
+// TODO fix this ugly hack.
+
+// Since we do not know how the dim3 structure will be represented in LLVM IR
+// (It might depend on architecture or OS? I am not sure) this is a function
+// which takes 3 arguments x, y, z and returns a dim3 structure
+
+// As of now it works for amd64 on linux
+
+// TODO I think we need to inline all usages after we have used it and delete it
+// because otherwise we will get an error about multiple definitions of the same
+// function when linking Alternatively, we can can change the name so that we
+// make sure it will be unique accross all modules of the program
+void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
+  Assign = nullptr;
+  for (auto &F : *M)
+    if (F.getName() == String) {
+      Assign = &F;
+      break;
+    }
+  assert(Assign);
 }
 
 bool callIsBarrier(CallInst *callInst) {
@@ -1399,54 +1422,25 @@ void FunctionTransformer::createDriverFunction() {
 
 }
 
-// TODO get the dim3 struct type from some other always included function
-Type *FunctionTransformer::getDim3StructType() {
-  for (auto &F : *M)
-    for (auto &bb : F)
-      for (auto &instruction : bb)
-        if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
-          if (Function *calledFunction = callInst->getCalledFunction())
-            for (auto &name : Dim3Names)
-              if (calledFunction->getName() == "__cpucuda_" + name)
-                return calledFunction->getReturnType();
-  // Return any random type - this should never happen anyways because all
-  // kernels should use some of the dim3 variables
-  LLVM_DEBUG(dbgs() << "Could not find dim3 struct type from function " << F->getName() << "\n");
-  return nullptr;
-}
-
-// TODO fix this ugly hack.
-
-// Since we do not know how the dim3 structure will be represented in LLVM IR
-// (It might depend on architecture or OS? I am not sure) this is a function
-// which takes 3 arguments x, y, z and returns a dim3 structure
-
-// As of now it works for amd64 on linux
-
-// TODO I think we need to inline all usages after we have used it and delete it
-// because otherwise we will get an error about multiple definitions of the same
-// function when linking Alternatively, we can can change the name so that we
-// make sure it will be unique accross all modules of the program
-void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
-  Assign = nullptr;
-  for (auto &F : *M)
-    if (F.getName() == String) {
-      Assign = &F;
-      break;
-    }
-  assert(Assign);
+void FunctionTransformer::getDim3StructType() {
+  Function *Tmp;
+  assignFunctionWithNameTo(M, Tmp, "__cpucuda_dim3_ptr_ret");
+  Dim3PtrType = Tmp->getReturnType();
+  Dim3Type = dyn_cast<PointerType>(Dim3PtrType)->getElementType();
 }
 
 void FunctionTransformer::getDim3Fs() {
-  assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
-  assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
-  assignFunctionWithNameTo(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
-  assignFunctionWithNameTo(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
-  assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
+  /*
+    assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
+    assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
+    assignFunctionWithNameTo(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
+    assignFunctionWithNameTo(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
+    assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 
-  assignFunctionWithNameTo(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
-  assignFunctionWithNameTo(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
-  assignFunctionWithNameTo(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
+    assignFunctionWithNameTo(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
+    assignFunctionWithNameTo(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
+    assignFunctionWithNameTo(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
+  */
 }
 
 void FunctionTransformer::createWrapperFunction() {
@@ -1520,7 +1514,7 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   I32Type = IntegerType::getInt32Ty(M->getContext());
   Dim3FieldType = IntegerType::getInt32Ty(M->getContext());
   getDim3Fs();
-  Dim3Type = getDim3StructType();
+  getDim3StructType();
 
   createSubkernels();
 
@@ -1557,8 +1551,8 @@ void CPUCudaPass::createCpucudaCallFunction() {
   assignFunctionWithNameTo(M, ArgsToDim3F, "__cpucuda_coerced_args_to_dim3");
 
   /*
-  DataLayout *DL = new DataLayout(M);
-  auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
+    DataLayout *DL = new DataLayout(M);
+    auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
   */
   IntegerType *KernelIdTy = dyn_cast<IntegerType>(CpucudaCallKernelF->getArg(0)->getType());
   assert(KernelIdTy);
@@ -1570,10 +1564,10 @@ void CPUCudaPass::createCpucudaCallFunction() {
 
   // Arg 0 is the kernel we are calling
   /*
-  auto KernelId = new PtrToIntInst(
-		  CpucudaCallKernelF->getArg(0),
-		  KernelIdTy,
-		  "kernel_id", EntryBB);
+    auto KernelId = new PtrToIntInst(
+    CpucudaCallKernelF->getArg(0),
+    KernelIdTy,
+    "kernel_id", EntryBB);
   */
   auto KernelId = CpucudaCallKernelF->getArg(0);
 
@@ -1599,12 +1593,12 @@ void CPUCudaPass::createCpucudaCallFunction() {
       auto ArgsPtrArg = CpucudaCallKernelF->getArg(6);
       auto SinglePtrTy = dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType();
       auto ArgPtr = GetElementPtrInst::Create(
-		      SinglePtrTy,
+          SinglePtrTy,
           ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
       auto ArgPtrLoad = new LoadInst(
-		      SinglePtrTy, ArgPtr, "cur_ptr", CaseBB);
+          SinglePtrTy, ArgPtr, "cur_ptr", CaseBB);
       auto CastArgPtr = new BitCastInst(
-		      ArgPtrLoad,
+          ArgPtrLoad,
           PointerType::get(OriginalF->getArg(i)->getType(), CpucudaCallKernelF->getAddressSpace()),
           "cast_cur_ptr", CaseBB);
       auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
@@ -1617,11 +1611,11 @@ void CPUCudaPass::createCpucudaCallFunction() {
     vector<CallInst *> ToDim3Calls;
     int ArgIdx = 1;
     for (int Dim3Idx = 0; Dim3Idx < 2; Dim3Idx++) {
-	    ValueVector Dim3FArgs;
-	    for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
-		    Dim3FArgs.push_back(CpucudaCallKernelF->getArg(ArgIdx++));
-	    }
-	    auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", CaseBB);
+      ValueVector Dim3FArgs;
+      for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
+        Dim3FArgs.push_back(CpucudaCallKernelF->getArg(ArgIdx++));
+      }
+      auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", CaseBB);
       CallArgs.push_back(ToDim3);
       ToDim3Calls.push_back(ToDim3);
     }
@@ -1631,10 +1625,10 @@ void CPUCudaPass::createCpucudaCallFunction() {
     assignFunctionWithNameTo(M, PtrToDim3F, "__cpucuda_dim3ptr_to_dim3");
     auto ToDim3 = CallInst::Create(PtrToDim3F->getFunctionType(), PtrToDim3F, LastDim3Arg, "dim3", CaseBB);
     /*
-    auto ToDim3 = new BitCastInst(
-		    LastDim3Arg,
-		    PointerType::get(FT->Dim3Type, CpucudaCallKernelF->getAddressSpace()), "bitcast_dim3_arg", CaseBB);
-    Value *LastDim3 = new LoadInst(FT->Dim3Type, ToDim3, "dim3", CaseBB);
+      auto ToDim3 = new BitCastInst(
+      LastDim3Arg,
+      PointerType::get(FT->Dim3Type, CpucudaCallKernelF->getAddressSpace()), "bitcast_dim3_arg", CaseBB);
+      Value *LastDim3 = new LoadInst(FT->Dim3Type, ToDim3, "dim3", CaseBB);
     */
     ToDim3Calls.push_back(ToDim3);
     CallArgs.push_back(ToDim3);

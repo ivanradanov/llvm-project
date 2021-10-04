@@ -1249,6 +1249,18 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   // not matter much
 
   // TEMP
+  if (!Args.hasArg(options::OPT_nobuiltininc)) {
+    // Add cuda_wrappers/* to our system include path.  This lets us wrap
+    // standard library headers.
+    SmallString<128> P(D.ResourceDir);
+    llvm::sys::path::append(P, "include");
+    llvm::sys::path::append(P, "cuda_wrappers");
+    CmdArgs.push_back("-internal-isystem");
+    CmdArgs.push_back(Args.MakeArgString(P));
+  }
+
+  CmdArgs.push_back("-include");
+  CmdArgs.push_back("__clang_cuda_runtime_wrapper.h");
   CmdArgs.push_back("-include");
   CmdArgs.push_back("cpucuda_detail/__cpucuda_internal_defs.h");
   //CmdArgs.push_back("-Icpucuda/");
