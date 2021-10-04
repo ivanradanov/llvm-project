@@ -170,20 +170,10 @@ set(openmp_wrapper_files
 )
 
 set(cpucuda_impl_header_files
-  cpucuda_detail/event.hpp
-  cpucuda_detail/kernel_execution_context.hpp
-  cpucuda_detail/types.hpp
-  cpucuda_detail/queue.hpp
-  cpucuda_detail/malloc.hpp
-  cpucuda_detail/util.hpp
-  cpucuda_detail/runtime.hpp
   cpucuda_detail/__cpucuda_internal_defs.h
   )
 
 set(cpucuda_header_files
-  cuda_runtime.h
-  cuda_fp16.h
-  cuda_runtime_api.h
   )
 
 set(output_dir ${LLVM_LIBRARY_OUTPUT_INTDIR}/clang/${CLANG_VERSION}/include)
