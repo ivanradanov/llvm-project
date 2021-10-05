@@ -944,8 +944,11 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   //     are not compiled for the device.
   if (FD && ((getLangOpts().CPlusPlus && FD->isMain()) ||
              getLangOpts().OpenCL || getLangOpts().SYCLIsDevice ||
-             (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>())))
+             (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()))) {
+    Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
+    Fn->addFnAttr(llvm::Attribute::NoInline);
+  }
 
   if (FD && getLangOpts().CPUCUDA && FD->hasAttr<CUDAGlobalAttr>()) {
 	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
@@ -1360,10 +1363,13 @@ void CodeGenFunction::GenerateCode(GlobalDecl GD, llvm::Function *Fn,
     EmitDestructorBody(Args);
   else if (isa<CXXConstructorDecl>(FD))
     EmitConstructorBody(Args);
+  // CPUCUDA
+  /*
   else if (getLangOpts().CUDA &&
            !getLangOpts().CUDAIsDevice &&
            FD->hasAttr<CUDAGlobalAttr>())
     CGM.getCUDARuntime().emitDeviceStub(*this, Args);
+  */
   else if (isa<CXXMethodDecl>(FD) &&
            cast<CXXMethodDecl>(FD)->isLambdaStaticInvoker()) {
     // The lambda static invoker function is special, because it forwards or

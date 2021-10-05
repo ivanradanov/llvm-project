@@ -242,6 +242,8 @@ bool types::isCuda(ID Id) {
 
   case TY_CUDA:
   case TY_PP_CUDA:
+  case TY_CPUCUDA:
+  case TY_PP_CPUCUDA:
   case TY_CUDA_DEVICE:
     return true;
   }

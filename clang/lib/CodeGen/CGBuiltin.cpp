@@ -5183,6 +5183,9 @@ RValue CodeGenFunction::EmitBuiltinExpr(const GlobalDecl GD, unsigned BuiltinID,
       llvm::Triple::getArchTypePrefix(getTarget().getTriple().getArch());
   if (!Prefix.empty()) {
     IntrinsicID = Intrinsic::getIntrinsicForGCCBuiltin(Prefix.data(), Name);
+    // CPUCUDA Always include nvvm intrinsics
+    if (IntrinsicID == Intrinsic::not_intrinsic)
+	    IntrinsicID = Intrinsic::getIntrinsicForGCCBuiltin("nvvm", Name);
     // NOTE we don't need to perform a compatibility flag check here since the
     // intrinsics are declared in Builtins*.def via LANGBUILTIN which filter the
     // MS builtins via ALL_MS_LANGUAGES and are filtered earlier.
@@ -5334,6 +5337,8 @@ static Value *EmitTargetArchBuiltinExpr(CodeGenFunction *CGF,
   case llvm::Triple::riscv64:
     return CGF->EmitRISCVBuiltinExpr(BuiltinID, E, ReturnValue);
   default:
+	  // CPUCUDA emit nvptx builtins in host code as well
+	  return CGF->EmitNVPTXBuiltinExpr(BuiltinID, E);
     return nullptr;
   }
 }

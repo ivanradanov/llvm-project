@@ -176,7 +176,9 @@ CudaInstallationDetector::CudaInstallationDetector(
       Candidates.emplace_back(D.SysRoot + "/usr/lib/cuda");
   }
 
-  bool NoCudaLib = Args.hasArg(options::OPT_nogpulib);
+  // CPUCUDA
+  // bool NoCudaLib = Args.hasArg(options::OPT_nogpulib);
+  bool NoCudaLib = true;
 
   for (const auto &Candidate : Candidates) {
     InstallPath = Candidate.Path;
