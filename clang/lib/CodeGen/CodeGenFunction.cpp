@@ -945,14 +945,16 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (FD && ((getLangOpts().CPlusPlus && FD->isMain()) ||
              getLangOpts().OpenCL || getLangOpts().SYCLIsDevice ||
              (getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()))) {
-    Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
     Fn->addFnAttr(llvm::Attribute::NoRecurse);
-    Fn->addFnAttr(llvm::Attribute::NoInline);
+  }
+
+  if (FD && getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()) {
+	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
+	  Fn->addFnAttr(llvm::Attribute::NoInline);
   }
 
   if (FD && getLangOpts().CPUCUDA && FD->hasAttr<CUDAGlobalAttr>()) {
 	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
-	  Fn->addFnAttr(llvm::Attribute::NoRecurse);
 	  Fn->addFnAttr(llvm::Attribute::NoInline);
   }
 

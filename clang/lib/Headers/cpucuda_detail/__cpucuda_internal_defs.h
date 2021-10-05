@@ -5,15 +5,30 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+  dim3 __cpucuda_construct_dim3(unsigned x, unsigned y, unsigned z) {
+    return dim3(x, y, z);
+  }
+  unsigned __cpucuda_dim3_get_x(dim3 d) {
+    return d.x;
+  }
+  unsigned __cpucuda_dim3_get_y(dim3 d) {
+    return d.y;
+  }
+  unsigned __cpucuda_dim3_get_z(dim3 d) {
+    return d.z;
+  }
   dim3 __cpucuda_coerced_args_to_dim3(dim3 d) {
     return d;
   }
-
-  unsigned __cpucudaPushCallConfiguration(dim3 gridDim,
-                                          dim3 blockDim,
-                                          size_t sharedMem = 0,
-                                          cudaStream_t stream = 0);
+  dim3 __cpucuda_dim3ptr_to_dim3(dim3 *d) {
+    return *d;
+  }
+  dim3 __cpucuda_declared_dim3_getter();
+  void __cpucuda_declared_dim3_user(dim3 d);
+  void __cpucuda_dim3_to_arg() {
+    dim3 d = __cpucuda_declared_dim3_getter();
+    __cpucuda_declared_dim3_user(d);
+  }
 
   void __cpucuda_call_kernel(
       //const void* func,
@@ -22,7 +37,7 @@ extern "C" {
       dim3 block_idx,
       dim3 block_dim,
       void** args,
-		  size_t shared_mem) {};
+		  size_t shared_mem);
 
   cudaError_t __cpucudaLaunchKernel(
 		  //const void* func,
@@ -31,7 +46,12 @@ extern "C" {
       dim3 block_dim,
       void** args,
       size_t shared_mem,
-		  cudaStream_t stream) {};
+		  cudaStream_t stream);
+
+	void __cpucuda_declared_function_user() {
+		__cpucudaLaunchKernel(0, {0,0,0}, {0,0,0}, 0, 0, 0);
+		__cpucuda_call_kernel(0, {0,0,0}, {0,0,0}, {0,0,0}, 0, 0);
+	}
 
 #ifdef __cplusplus
 }

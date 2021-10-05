@@ -498,7 +498,8 @@ RValue CodeGenFunction::EmitCPUCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
 
 RValue CodeGenFunction::EmitCUDAKernelCallExpr(const CUDAKernelCallExpr *E,
                                                ReturnValueSlot ReturnValue) {
-	if (getLangOpts().CPUCUDA)
+	// Always emit the CPUCUDA kernel call expr
+	if (true || getLangOpts().CPUCUDA)
 		return EmitCPUCUDAKernelCallExpr(E, ReturnValue);
 	else
     return CGM.getCUDARuntime().EmitCUDAKernelCallExpr(*this, E, ReturnValue);

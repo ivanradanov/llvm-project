@@ -37,6 +37,8 @@ using namespace llvm;
 // TODO I think we should be passing all dim3's around using pointers - it might
 // be the most ABI stable solution
 
+// TODO fix the malloc (and loop alloca) leaks.......
+
 static const int MAX_CUDA_THREADS = 1024;
 
 using std::vector;
@@ -63,6 +65,33 @@ const vector<std::string> Dim3Names = {
   "blockIdx",
   "blockDim",
   "threadIdx"
+};
+
+const map<std::string, vector<std::string>> Dim3GetterIntrinsicNames = {
+  {Dim3Names[0], {
+      "llvm.nvvm.read.ptx.sreg.nctaid.x",
+      "llvm.nvvm.read.ptx.sreg.nctaid.y",
+      "llvm.nvvm.read.ptx.sreg.nctaid.z",
+    }
+  },
+  {Dim3Names[1], {
+      "llvm.nvvm.read.ptx.sreg.ctaid.x",
+      "llvm.nvvm.read.ptx.sreg.ctaid.y",
+      "llvm.nvvm.read.ptx.sreg.ctaid.z",
+    }
+  },
+  {Dim3Names[2], {
+      "llvm.nvvm.read.ptx.sreg.ntid.x",
+      "llvm.nvvm.read.ptx.sreg.ntid.y",
+      "llvm.nvvm.read.ptx.sreg.ntid.z",
+    }
+  },
+  {Dim3Names[3], {
+      "llvm.nvvm.read.ptx.sreg.tid.x",
+      "llvm.nvvm.read.ptx.sreg.tid.y",
+      "llvm.nvvm.read.ptx.sreg.tid.z",
+    }
+  },
 };
 
 struct UsedValVars {
@@ -105,10 +134,6 @@ public:
     Function *Gettery;
     Function *Getterz;
     Function *Dim3ToArg;
-
-    Function *RealGridDim;
-    Function *RealBlockDim;
-    Function *RealBlockIdx;
   } Dim3Fs;
 
   std::set<BasicBlock *> BlocksAfterBarriers;
@@ -205,7 +230,7 @@ void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) 
 
 bool callIsBarrier(CallInst *callInst) {
   if (Function *calledFunction = callInst->getCalledFunction()) {
-    return calledFunction->getName() == "__cpucuda_syncthreads";
+    return calledFunction->getName() == "llvm.nvvm.barrier0";
   } else {
     return false;
   }
@@ -1090,17 +1115,34 @@ void FunctionTransformer::replaceDim3Usages() {
       auto &instruction = *It;
       if (CallInst *callInst = dyn_cast<CallInst>(&instruction))
         if (Function *calledFunction = callInst->getCalledFunction())
-          for (unsigned i = 0; i < Dim3Names.size(); ++i)
-            if (calledFunction->getName() == "__cpucuda_" + Dim3Names[i]) {
-              auto Arg = F->getArg(i + Dim3ArgStartIndex);
-              callInst->replaceAllUsesWith(Arg);
-              It = callInst->eraseFromParent();
-              erased = true;
-              break;
+          for (unsigned i = 0; i < Dim3Names.size(); ++i) {
+            vector<Function *> GetterFs = {
+              Dim3Fs.Getterx,
+              Dim3Fs.Gettery,
+              Dim3Fs.Getterz,
+            };
+            for (unsigned dim = 0; dim < 3; ++dim) {
+              if (calledFunction->getName() == Dim3GetterIntrinsicNames.at(Dim3Names[i])[dim]) {
+                auto Dim3Arg = F->getArg(i + Dim3ArgStartIndex);
+                ValueVector Dim3Args = convertDim3ToArgs(Dim3Arg, callInst);
+                CallInst *Dim3Dim = CallInst::Create(
+                    GetterFs[dim]->getFunctionType(), GetterFs[dim], Dim3Args,
+                    "single_dim");
+                Dim3Dim->insertAfter(dyn_cast<Instruction>(*(Dim3Args.end() - 1)));
+                callInst->replaceAllUsesWith(Dim3Dim);
+                It = callInst->eraseFromParent();
+                erased = true;
+
+                InlineFunctionInfo IFI;
+                InlineResult IR = InlineFunction(*Dim3Dim, IFI);
+                assert(IR.isSuccess());
+
+                break;
+              }
             }
+          }
       if (!erased)
         ++It;
-
     }
 }
 
@@ -1424,80 +1466,23 @@ void FunctionTransformer::createDriverFunction() {
 
 void FunctionTransformer::getDim3StructType() {
   Function *Tmp;
+  assignFunctionWithNameTo(M, Tmp, "__cpucuda_coerced_args_to_dim3");
+  Dim3Type = Tmp->getReturnType();
+  return;
+
+  // Will use below if we transition to using dim3 ptrs instead of coalesced
+  // args
   assignFunctionWithNameTo(M, Tmp, "__cpucuda_dim3_ptr_ret");
   Dim3PtrType = Tmp->getReturnType();
   Dim3Type = dyn_cast<PointerType>(Dim3PtrType)->getElementType();
 }
 
 void FunctionTransformer::getDim3Fs() {
-  /*
-    assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
-    assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
-    assignFunctionWithNameTo(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
-    assignFunctionWithNameTo(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
-    assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
-
-    assignFunctionWithNameTo(M, Dim3Fs.RealGridDim, "__cpucuda_real_gridDim");
-    assignFunctionWithNameTo(M, Dim3Fs.RealBlockDim, "__cpucuda_real_blockDim");
-    assignFunctionWithNameTo(M, Dim3Fs.RealBlockIdx, "__cpucuda_real_blockIdx");
-  */
-}
-
-void FunctionTransformer::createWrapperFunction() {
-  auto NewF = Function::Create(OriginalF->getFunctionType(), OriginalF->getLinkage(), OriginalF->getAddressSpace(),
-                               OriginalF->getName(), OriginalF->getParent());
-
-  auto NewFArgIt = NewF->arg_begin();
-  for (auto &Arg : OriginalF->args()) {
-    auto ArgName = Arg.getName();
-    NewFArgIt->setName(ArgName);
-    NewFArgIt++;
-  }
-
-  // Now we have an empty function
-  WrapperF = NewF;
-
-  BasicBlock *EntryBB = BasicBlock::Create(WrapperF->getContext(), "entry", WrapperF);
-  CallInst *GridDim = CallInst::Create(
-      Dim3Fs.RealGridDim->getFunctionType(), Dim3Fs.RealGridDim, {},
-      "gridDim", EntryBB);
-  CallInst *BlockDim = CallInst::Create(
-      Dim3Fs.RealBlockDim->getFunctionType(), Dim3Fs.RealBlockDim, {},
-      "blockDim", EntryBB);
-  CallInst *BlockIdx = CallInst::Create(
-      Dim3Fs.RealBlockIdx->getFunctionType(), Dim3Fs.RealBlockIdx, {},
-      "blockIdx", EntryBB);
-
-  ValueVector Args;
-  for (auto &Arg : WrapperF->args()) {
-    Args.push_back(&Arg);
-  }
-  Args.push_back(GridDim);
-  Args.push_back(BlockIdx);
-  Args.push_back(BlockDim);
-
-
-  CallInst *DriverCall = CallInst::Create(
-      DriverF->getFunctionType(), DriverF, Args,
-      "", EntryBB);
-
-  ReturnInst::Create(M->getContext(), EntryBB);
-
-  // TODO This stopped working when preserveddata is malloced for some reason, investigate
-  // opt: /scr0/ivan/src/llvm-project/llvm/lib/Transforms/Utils/ValueMapper.cpp:904: void {anonymous}::Mapper::remapInstruction(llvm::Instruction*): Assertion `(Flags & RF_IgnoreMissingLocals) && "Referenced value not in value map!"' failed.
-  InlineFunctionInfo IFI;
-  InlineResult IR = InlineFunction(*DriverCall, IFI);
-  if (!IR.isSuccess()) {
-    LLVM_DEBUG(dbgs() << "Could not inline driver function call:\n");
-    LLVM_DEBUG(DriverCall->dump());
-  }
-
-  OriginalF->replaceAllUsesWith(WrapperF);
-
-  std::string NewName = std::string(OriginalF->getName()) + "_original";
-  WrapperF->takeName(OriginalF);
-  OriginalF->setName(NewName);
-
+  assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
+  assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
+  assignFunctionWithNameTo(M, Dim3Fs.Gettery, "__cpucuda_dim3_get_y");
+  assignFunctionWithNameTo(M, Dim3Fs.Getterz, "__cpucuda_dim3_get_z");
+  assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 }
 
 void FunctionTransformer::cleanupFunctions() {
@@ -1519,9 +1504,6 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   createSubkernels();
 
   createDriverFunction();
-
-  // createWrapperFunction();
-
 }
 
 
@@ -1535,6 +1517,20 @@ void CPUCudaPass::cleanup(Module *M) {
     delete Pair.second;
   }
   FunctionTransformers = std::map<Function *, FunctionTransformer *>();
+
+
+  for (auto Name : {"__cpucuda_construct_dim3",
+                    "__cpucuda_dim3_get_x",
+                    "__cpucuda_dim3_get_y",
+                    "__cpucuda_dim3_get_z",
+                    "__cpucuda_coerced_args_to_dim3",
+                    "__cpucuda_dim3ptr_to_dim3",
+                    "__cpucuda_dim3_to_arg",
+                    "__cpucuda_declared_function_user"}) {
+    Function *ToErase;
+    assignFunctionWithNameTo(M, ToErase, Name);
+    ToErase->eraseFromParent();
+  }
 }
 
 void CPUCudaPass::createCpucudaCallFunction() {
@@ -1640,7 +1636,8 @@ void CPUCudaPass::createCpucudaCallFunction() {
 void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
   Function *PushF;
   Function *LaunchKernelF;
-  assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
+  //assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
+  assignFunctionWithNameTo(M, PushF, "__cudaPushCallConfiguration");
   assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernel");
 
   DataLayout *DL = new DataLayout(M);
@@ -1706,13 +1703,16 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
       // share mem size
       Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
       // stream
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      auto Stream = PushCall->getArgOperand(PushCallArgIdx++);
+      // TODO the argument number will change depending on ABI I think
+      auto StreamCast = new BitCastInst(
+          Stream, LaunchKernelF->getArg(7)->getType(), "stream_bitcast", KernelCall);
+      Args.push_back(StreamCast);
 
       CallInst::Create(LaunchKernelF->getFunctionType(), LaunchKernelF, Args, "", KernelCall);
 
       PushCall->eraseFromParent();
       KernelCall->eraseFromParent();
-
     }
   }
 }
