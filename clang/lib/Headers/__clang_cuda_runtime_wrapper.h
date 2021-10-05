@@ -444,5 +444,8 @@ extern "C" unsigned __cudaPushCallConfiguration(dim3 gridDim, dim3 blockDim,
                                                 void *stream = 0);
 #endif
 
+// CPUCUDA
+#include <cpucuda_detail/__cpucuda_internal_defs.h>
+
 #endif // __CUDA__
 #endif // __CLANG_CUDA_RUNTIME_WRAPPER_H__

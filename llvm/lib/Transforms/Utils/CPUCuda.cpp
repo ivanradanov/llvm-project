@@ -1531,13 +1531,6 @@ void CPUCudaPass::cleanup(Module *M) {
     Pair.second->cleanupFunctions();
   }
 
-  // This function exists only to make sure the above _real_ functions get
-  // included in the llvm module - find out how to do this properly TODO
-  Function *User;
-  assignFunctionWithNameTo(M, User, "__cpucuda_dim3_to_arg");
-  User->eraseFromParent();
-  // TODO do we need to cleanup other stuff?
-
   for (auto &Pair : FunctionTransformers) {
     delete Pair.second;
   }
