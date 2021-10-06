@@ -1170,7 +1170,8 @@ public:
 
   BranchInst *FromCond;
 
-  ThreadIdxLoop(std::string IdxName, Value *LoopTo, Function *F, FunctionTransformer *T) {
+  ThreadIdxLoop(std::string IdxName, Value *LoopTo, Function *F,
+                FunctionTransformer *T, Instruction *InsertAllocaBefore) {
     this->F = F;
     this->T = T;
 
@@ -1178,7 +1179,7 @@ public:
 
     IdxPtr = new AllocaInst(T->Dim3FieldType, F->getAddressSpace(),
                             ConstantInt::get(T->Dim3FieldType, 1),
-                            IdxName + "_ptr", EntryBB);
+                            IdxName + "_ptr", InsertAllocaBefore);
     new StoreInst(ConstantInt::get(T->Dim3FieldType, 0), IdxPtr, EntryBB);
 
     CondBB = BasicBlock::Create(F->getContext(), "loop_cond" + IdxName, F);
@@ -1307,7 +1308,6 @@ void FunctionTransformer::createDriverFunction() {
   BlockSize = BinaryOperator::Create(
       Instruction::BinaryOps::Mul, BlockSize, BlockDimz, "blockSize", EntryBB);
 
-  // TODO we are leaking the malloc'd memory, free it in the exit block...
   Instruction *PreservedData;
   if (Options.MallocPreservedDataArray) {
     Value *MallocSize;
@@ -1352,7 +1352,7 @@ void FunctionTransformer::createDriverFunction() {
   new StoreInst(EntrySKConst, SubkernelRetNextPtr, EntryBB);
 
   BasicBlock *WhileEntryBB = BasicBlock::Create(DriverF->getContext(), "while_entry", DriverF);
-  BranchInst::Create(WhileEntryBB, EntryBB);
+  auto EntryBBEndInst = BranchInst::Create(WhileEntryBB, EntryBB);
   LoadInst *Next = new LoadInst(LLVMBBIdType, SubkernelRetNextPtr, "next", WhileEntryBB);
   LoadInst *From = new LoadInst(LLVMBBIdType, SubkernelRetFromPtr, "from", WhileEntryBB);
 
@@ -1391,7 +1391,7 @@ void FunctionTransformer::createDriverFunction() {
     CallInst *SubkernelCall;
 
     if (Options.SingleDimThreadLoop) {
-      ThreadIdxLoop LoopLin("threadIdx_linear_index_", BlockSize, DriverF, this);
+      ThreadIdxLoop LoopLin("threadIdx_linear_index_", BlockSize, DriverF, this, EntryBBEndInst);
 
       BasicBlock *SubkernelCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", DriverF);
 
@@ -1414,9 +1414,9 @@ void FunctionTransformer::createDriverFunction() {
       BranchInst::Create(WhileEntryBB, LoopLin.EndBB);
 
     } else {
-      ThreadIdxLoop Loopz("threadIdx_z_", BlockDimz, DriverF, this);
-      ThreadIdxLoop Loopy("threadIdx_y_", BlockDimy, DriverF, this);
-      ThreadIdxLoop Loopx("threadIdx_x_", BlockDimx, DriverF, this);
+      ThreadIdxLoop Loopz("threadIdx_z_", BlockDimz, DriverF, this, EntryBBEndInst);
+      ThreadIdxLoop Loopy("threadIdx_y_", BlockDimy, DriverF, this, EntryBBEndInst);
+      ThreadIdxLoop Loopx("threadIdx_x_", BlockDimx, DriverF, this, EntryBBEndInst);
       Loopz.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
       Loopy.hookUpBBs(Loopx.EntryBB, Loopx.EndBB);
 
@@ -1455,9 +1455,10 @@ void FunctionTransformer::createDriverFunction() {
       assert(IR.isSuccess());
     }
   }
-
-  ReturnInst::Create(M->getContext(), WhileEndBB);
-
+  auto Ret = ReturnInst::Create(M->getContext(), WhileEndBB);
+  if (Options.MallocPreservedDataArray) {
+    auto FreeCall = CallInst::CreateFree(PreservedData, Ret);
+  }
 }
 
 void FunctionTransformer::getDim3StructType() {
