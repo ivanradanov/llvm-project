@@ -1593,7 +1593,6 @@ void CPUCudaPass::createCpucudaCallFunction() {
       auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
       CallArgs.push_back(Arg);
 
-      _CaseKernelId++;
     }
     // TODO This will change with platform ABI
     // The first two dim3's get passed coalesced, the third one byval
@@ -1630,6 +1629,7 @@ void CPUCudaPass::createCpucudaCallFunction() {
       InlineResult IR = InlineFunction(*F, IFI);
       assert(IR.isSuccess() && "Has to be inlined");
     }
+    _CaseKernelId++;
   }
 }
 
