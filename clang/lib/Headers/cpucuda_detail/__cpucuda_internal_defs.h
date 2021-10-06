@@ -31,27 +31,24 @@ extern "C" {
   }
 
   void __cpucuda_call_kernel(
-      //const void* func,
-		  int func,
       dim3 grid_dim,
       dim3 block_idx,
       dim3 block_dim,
       void** args,
-		  size_t shared_mem);
+      size_t shared_mem);
 
   cudaError_t __cpucudaLaunchKernel(
-		  //const void* func,
-		  int func,
+      const void* func,
       dim3 grid_dim,
       dim3 block_dim,
       void** args,
       size_t shared_mem,
-		  cudaStream_t stream);
+      cudaStream_t stream);
 
-	void __cpucuda_declared_function_user() {
-		__cpucudaLaunchKernel(0, {0,0,0}, {0,0,0}, 0, 0, 0);
-		__cpucuda_call_kernel(0, {0,0,0}, {0,0,0}, {0,0,0}, 0, 0);
-	}
+  void __cpucuda_declared_function_user() {
+    __cpucudaLaunchKernel(0, {0,0,0}, {0,0,0}, 0, 0, 0);
+    __cpucuda_call_kernel({0,0,0}, {0,0,0}, {0,0,0}, 0, 0);
+  }
 
 #ifdef __cplusplus
 }

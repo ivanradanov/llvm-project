@@ -27,10 +27,6 @@ using namespace llvm;
 
 // TODO handle lifetimes if needed?
 
-// TODO integrate the hipCPU code
-
-// TODO automatically include the internal cpucuda header
-
 // TODO split the pass in two parts - before and after replacing the dim3 getter
 // calls with arguments, and optimise the code in between
 
@@ -193,12 +189,12 @@ public:
   void removeReferencesInPhi(const BBVector &BBsToRemove);
   bool isSharedVar(Instruction &I);
   void createDriverFunction();
+  void createWrapperFunction();
   void replaceDim3Usages();
   void getDim3StructType();
   void getDim3Fs();
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
   void cleanupFunctions();
-  void createWrapperFunction();
 
   FunctionTransformer(Module *M, Function *F);
 
@@ -1477,6 +1473,89 @@ void FunctionTransformer::getDim3StructType() {
   Dim3Type = dyn_cast<PointerType>(Dim3PtrType)->getElementType();
 }
 
+void FunctionTransformer::createWrapperFunction() {
+  Function *CpucudaCallKernel;
+  assignFunctionWithNameTo(M, CpucudaCallKernel, "__cpucuda_call_kernel");
+
+  Function *ArgsToDim3F;
+  assignFunctionWithNameTo(M, ArgsToDim3F, "__cpucuda_coerced_args_to_dim3");
+
+
+  WrapperF = Function::Create(CpucudaCallKernel->getFunctionType(), F->getLinkage(),
+                              F->getAddressSpace(), F->getName(), F->getParent());
+  /*
+    DataLayout *DL = new DataLayout(M);
+    auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
+  */
+  BasicBlock *EntryBB = BasicBlock::Create(WrapperF->getContext(), "entry", WrapperF);
+  BasicBlock *ExitBB = BasicBlock::Create(WrapperF->getContext(), "exit", WrapperF);
+  ReturnInst::Create(M->getContext(), ExitBB);
+
+
+  // Arg 0 is the kernel we are calling
+  /*
+    auto KernelId = new PtrToIntInst(
+    WrapperF->getArg(0),
+    KernelIdTy,
+    "kernel_id", EntryBB);
+  */
+
+  ValueVector CallArgs;
+  for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
+    ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
+    // TODO Arg position will change with platform ABI
+    auto ArgsPtrArg = WrapperF->getArg(6);
+    auto SinglePtrTy = dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType();
+    auto ArgPtr = GetElementPtrInst::Create(
+        SinglePtrTy,
+        ArgsPtrArg, {ArgIdx}, "cur_ptr", EntryBB);
+    auto ArgPtrLoad = new LoadInst(
+        SinglePtrTy, ArgPtr, "cur_ptr", EntryBB);
+    auto CastArgPtr = new BitCastInst(
+        ArgPtrLoad,
+        PointerType::get(OriginalF->getArg(i)->getType(), WrapperF->getAddressSpace()),
+        "cast_cur_ptr", EntryBB);
+    auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", EntryBB);
+    CallArgs.push_back(Arg);
+
+  }
+  // TODO This will change with platform ABI
+  // The three dim3's get passed coalesced
+  vector<CallInst *> ToDim3Calls;
+  int ArgIdx = 0;
+  for (int Dim3Idx = 0; Dim3Idx < 3; Dim3Idx++) {
+    ValueVector Dim3FArgs;
+    for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
+      Dim3FArgs.push_back(WrapperF->getArg(ArgIdx++));
+    }
+    auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", EntryBB);
+    CallArgs.push_back(ToDim3);
+    ToDim3Calls.push_back(ToDim3);
+  }
+
+  // Below would be how to pass a dim3 it if it was byval
+  /*
+    auto LastDim3Arg = WrapperF->getArg(ArgIdx++);
+    Function *PtrToDim3F;
+    assignFunctionWithNameTo(M, PtrToDim3F, "__cpucuda_dim3ptr_to_dim3");
+    auto ToDim3 = CallInst::Create(PtrToDim3F->getFunctionType(), PtrToDim3F, LastDim3Arg, "dim3", EntryBB);
+    ToDim3Calls.push_back(ToDim3);
+    CallArgs.push_back(ToDim3);
+  */
+
+  CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", EntryBB);
+  BranchInst::Create(ExitBB, EntryBB);
+
+  for (auto &F : ToDim3Calls) {
+    InlineFunctionInfo IFI;
+    InlineResult IR = InlineFunction(*F, IFI);
+    assert(IR.isSuccess() && "Has to be inlined");
+  }
+
+  WrapperF->takeName(OriginalF);
+
+}
+
 void FunctionTransformer::getDim3Fs() {
   assignFunctionWithNameTo(M, Dim3Fs.ConstructorF, "__cpucuda_construct_dim3");
   assignFunctionWithNameTo(M, Dim3Fs.Getterx, "__cpucuda_dim3_get_x");
@@ -1504,6 +1583,8 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   createSubkernels();
 
   createDriverFunction();
+
+  createWrapperFunction();
 }
 
 
@@ -1534,118 +1615,36 @@ void CPUCudaPass::cleanup(Module *M) {
 }
 
 void CPUCudaPass::createCpucudaCallFunction() {
-  assignFunctionWithNameTo(M, CpucudaCallKernelF, "__cpucuda_call_kernel");
 
-  Function *ArgsToDim3F;
-  assignFunctionWithNameTo(M, ArgsToDim3F, "__cpucuda_coerced_args_to_dim3");
-
-  /*
-    DataLayout *DL = new DataLayout(M);
-    auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
-  */
-  IntegerType *KernelIdTy = dyn_cast<IntegerType>(CpucudaCallKernelF->getArg(0)->getType());
-  assert(KernelIdTy);
-
-  BasicBlock *EntryBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "entry", CpucudaCallKernelF);
-  BasicBlock *ExitBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "exit", CpucudaCallKernelF);
-  ReturnInst::Create(M->getContext(), ExitBB);
-
-
-  // Arg 0 is the kernel we are calling
-  /*
-    auto KernelId = new PtrToIntInst(
-    CpucudaCallKernelF->getArg(0),
-    KernelIdTy,
-    "kernel_id", EntryBB);
-  */
-  auto KernelId = CpucudaCallKernelF->getArg(0);
-
-  SwitchInst *Switch = SwitchInst::Create(KernelId, ExitBB,
-                                          FunctionTransformers.size(), EntryBB);
-
-  int _CaseKernelId = 0;
-  for (auto &Pair : FunctionTransformers) {
-    auto FT = Pair.second;
-    auto DriverF = FT->DriverF;
-    auto OriginalF = FT->OriginalF;
-    //auto CaseKernelId = dyn_cast<ConstantInt>(ConstantExpr::getBitCast(DriverF, KernelIdTy));
-    auto CaseKernelId = ConstantInt::get(KernelIdTy, _CaseKernelId);
-
-
-    BasicBlock *CaseBB = BasicBlock::Create(CpucudaCallKernelF->getContext(), "case", CpucudaCallKernelF);
-    Switch->addCase(CaseKernelId, CaseBB);
-
-    ValueVector CallArgs;
-    for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
-      ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
-      // TODO Arg position will change with platform ABI
-      auto ArgsPtrArg = CpucudaCallKernelF->getArg(6);
-      auto SinglePtrTy = dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType();
-      auto ArgPtr = GetElementPtrInst::Create(
-          SinglePtrTy,
-          ArgsPtrArg, {ArgIdx}, "cur_ptr", CaseBB);
-      auto ArgPtrLoad = new LoadInst(
-          SinglePtrTy, ArgPtr, "cur_ptr", CaseBB);
-      auto CastArgPtr = new BitCastInst(
-          ArgPtrLoad,
-          PointerType::get(OriginalF->getArg(i)->getType(), CpucudaCallKernelF->getAddressSpace()),
-          "cast_cur_ptr", CaseBB);
-      auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", CaseBB);
-      CallArgs.push_back(Arg);
-
-    }
-    // TODO This will change with platform ABI
-    // The first two dim3's get passed coalesced, the third one byval
-    vector<CallInst *> ToDim3Calls;
-    int ArgIdx = 1;
-    for (int Dim3Idx = 0; Dim3Idx < 2; Dim3Idx++) {
-      ValueVector Dim3FArgs;
-      for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
-        Dim3FArgs.push_back(CpucudaCallKernelF->getArg(ArgIdx++));
-      }
-      auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", CaseBB);
-      CallArgs.push_back(ToDim3);
-      ToDim3Calls.push_back(ToDim3);
-    }
-
-    auto LastDim3Arg = CpucudaCallKernelF->getArg(ArgIdx++);
-    Function *PtrToDim3F;
-    assignFunctionWithNameTo(M, PtrToDim3F, "__cpucuda_dim3ptr_to_dim3");
-    auto ToDim3 = CallInst::Create(PtrToDim3F->getFunctionType(), PtrToDim3F, LastDim3Arg, "dim3", CaseBB);
-    /*
-      auto ToDim3 = new BitCastInst(
-      LastDim3Arg,
-      PointerType::get(FT->Dim3Type, CpucudaCallKernelF->getAddressSpace()), "bitcast_dim3_arg", CaseBB);
-      Value *LastDim3 = new LoadInst(FT->Dim3Type, ToDim3, "dim3", CaseBB);
-    */
-    ToDim3Calls.push_back(ToDim3);
-    CallArgs.push_back(ToDim3);
-
-    CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", CaseBB);
-    BranchInst::Create(ExitBB, CaseBB);
-
-    for (auto &F : ToDim3Calls) {
-      InlineFunctionInfo IFI;
-      InlineResult IR = InlineFunction(*F, IFI);
-      assert(IR.isSuccess() && "Has to be inlined");
-    }
-    _CaseKernelId++;
-  }
 }
 
-void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
+void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
   Function *PushF;
   Function *LaunchKernelF;
-  //assignFunctionWithNameTo(M, PushF, "__cpucudaPushCallConfiguration");
   assignFunctionWithNameTo(M, PushF, "__cudaPushCallConfiguration");
   assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernel");
 
+  /*
+    auto KernelVoidPtr = WrapperF->getArg(0);
+    PointerType *KernelPtrTy = CpucudaCallKernel->getType();
+
+    auto KernelPtr = new BitCastInst(
+    KernelVoidPtr, KernelPtrTy, "kernel_ptr", EntryBB);
+  */
   DataLayout *DL = new DataLayout(M);
 
-  for (User *U : F->users()) {
+  // TODO can a user appear twice in the users() if for example it has two
+  // operands using the function value
+  vector<User *> Users;
+  for (User *U : FT->OriginalF->users()) {
+    Users.push_back(U);
+  }
+  for (User *U : Users) {
     if (auto KernelCall = dyn_cast<CallInst>(U)) {
-      if (KernelCall->getCalledFunction() != F)
+      if (KernelCall->getCalledFunction() != FT->OriginalF) {
+        assert(false && "Unsupported case");
         continue;
+      }
 
       CallInst *PushCall;
       Instruction *PrevInst = KernelCall;
@@ -1687,7 +1686,9 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
         new StoreInst(ArgMalloc, CastArgPtr, KernelCall);
       }
       ValueVector Args;
-      Args.push_back(ConstantInt::get(dyn_cast<IntegerType>(LaunchKernelF->getArg(0)->getType()), KernelIdx));
+      auto CastWrapperF = new BitCastInst(
+          FT->WrapperF, LaunchKernelF->getArg(0)->getType(), "kernel_bitcast", KernelCall);
+      Args.push_back(CastWrapperF);
       int PushCallArgIdx = 0;
       // grid dim
       Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
@@ -1713,6 +1714,8 @@ void CPUCudaPass::transformCallSites(int KernelIdx, Function *F) {
 
       PushCall->eraseFromParent();
       KernelCall->eraseFromParent();
+    } else {
+      assert(false && "Unsupported case");
     }
   }
 }
@@ -1744,9 +1747,8 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
   createCpucudaCallFunction();
 
-  int KernelIdx = 0;
   for (auto &Pair : FunctionTransformers) {
-    transformCallSites(KernelIdx++, Pair.first);
+    transformCallSites(Pair.second);
   }
 
   // TODO we need to rename cudaLaunchKernel I think

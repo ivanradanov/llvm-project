@@ -25,10 +25,8 @@ namespace llvm {
 		Module *M;
 
 		std::map<Function *, FunctionTransformer *> FunctionTransformers;
-		Function *CpucudaCallKernelF;
 
-
-		void transformCallSites(int KernelIdx, Function *F);
+		void transformCallSites(FunctionTransformer * FT);
 		void createCpucudaCallFunction();
 
 	public:
