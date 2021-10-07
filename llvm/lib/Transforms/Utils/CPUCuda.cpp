@@ -1457,7 +1457,7 @@ void FunctionTransformer::createDriverFunction() {
   }
   auto Ret = ReturnInst::Create(M->getContext(), WhileEndBB);
   if (Options.MallocPreservedDataArray) {
-    auto FreeCall = CallInst::CreateFree(PreservedData, Ret);
+    CallInst::CreateFree(PreservedData, Ret);
   }
 }
 
@@ -1484,22 +1484,9 @@ void FunctionTransformer::createWrapperFunction() {
 
   WrapperF = Function::Create(CpucudaCallKernel->getFunctionType(), F->getLinkage(),
                               F->getAddressSpace(), F->getName(), F->getParent());
-  /*
-    DataLayout *DL = new DataLayout(M);
-    auto PointerSizeIntTy = IntegerType::getIntNTy(M->getContext(), DL->getMaxPointerSizeInBits());
-  */
   BasicBlock *EntryBB = BasicBlock::Create(WrapperF->getContext(), "entry", WrapperF);
   BasicBlock *ExitBB = BasicBlock::Create(WrapperF->getContext(), "exit", WrapperF);
   ReturnInst::Create(M->getContext(), ExitBB);
-
-
-  // Arg 0 is the kernel we are calling
-  /*
-    auto KernelId = new PtrToIntInst(
-    WrapperF->getArg(0),
-    KernelIdTy,
-    "kernel_id", EntryBB);
-  */
 
   ValueVector CallArgs;
   for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
@@ -1661,30 +1648,38 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
       auto Int8PtrTy = PointerType::get(Int8Ty, AS);
       auto Int32Ty = IntegerType::getInt32Ty(M->getContext());
 
-      // TODO we are leaking memory...
-      Instruction *ArgArray = CallInst::CreateMalloc(
+      int MallocSize = DL->getMaxPointerSizeInBits() * KernelCall->getNumArgOperands();
+      for (unsigned i = 0; i < KernelCall->getNumArgOperands(); ++i) {
+        auto ArgVal = KernelCall->getArgOperand(i);
+        MallocSize += DL->getTypeAllocSize(ArgVal->getType());
+      }
+
+      Instruction *ArgPtrArray = CallInst::CreateMalloc(
           KernelCall,
           Int32Ty,
           Int8PtrTy,
-          //PointerType::get(PointerType::get(Int8Ty, AS), AS),
-          ConstantInt::get(Int32Ty, DL->getMaxPointerSizeInBits() * (KernelCall->getNumArgOperands() + 1)),
-          nullptr, nullptr, "arg_array");
+          ConstantInt::get(Int32Ty, MallocSize),
+          nullptr, nullptr, "arg_ptr_array");
+      Value *ArgArray = GetElementPtrInst::Create(
+          Int8PtrTy, ArgPtrArray, {ConstantInt::get(Int32Ty, KernelCall->getNumArgOperands())},
+          "arg_ptr", KernelCall);
+      ArgArray = new BitCastInst(ArgArray, Int8PtrTy, "cast_arg_ptr", KernelCall);
+      int ArgArrayIdx = 0;
       for (unsigned i = 0; i < KernelCall->getNumArgOperands(); ++i) {
         auto ArgVal = KernelCall->getArgOperand(i);
         auto ArgPtr = GetElementPtrInst::Create(
-            Int8PtrTy, ArgArray, {ConstantInt::get(Int32Ty, i)}, "arg_ptr", KernelCall);
+            Int8PtrTy, ArgPtrArray, {ConstantInt::get(Int32Ty, i)}, "arg_ptr", KernelCall);
         auto CastArgPtr = new BitCastInst(
             ArgPtr, PointerType::get(PointerType::get(ArgVal->getType(), AS), AS), "arg_ptr_bitcast", KernelCall);
-        DataLayout *DL = new DataLayout(M);
-        // TODO leaking here too ..
-        Instruction *ArgMalloc = CallInst::CreateMalloc(
-            KernelCall,
-            Int32Ty,
-            ArgVal->getType(),
-            ConstantInt::get(Int32Ty, DL->getTypeAllocSize(ArgVal->getType())),
-            nullptr, nullptr, "arg_malloc");
+        auto _ArgMalloc = GetElementPtrInst::Create(
+            Int8Ty, ArgArray, {ConstantInt::get(Int32Ty, ArgArrayIdx)},
+            "arg_malloc", KernelCall);
+        auto ArgMalloc = new BitCastInst(
+            _ArgMalloc, PointerType::get(ArgVal->getType(), AS),
+            "arg_malloc_bitcast", KernelCall);
         new StoreInst(ArgVal, ArgMalloc, KernelCall);
         new StoreInst(ArgMalloc, CastArgPtr, KernelCall);
+        ArgArrayIdx += DL->getTypeAllocSize(ArgVal->getType());
       }
       ValueVector Args;
       auto CastWrapperF = new BitCastInst(
@@ -1700,7 +1695,7 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
 
       // void **args
       //LoadInst *ArgArrayL = new LoadInst(PointerType::get(Int8PtrTy, AS), ArgArray, "args", KernelCall);
-      Args.push_back(ArgArray);
+      Args.push_back(ArgPtrArray);
 
       // share mem size
       Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
