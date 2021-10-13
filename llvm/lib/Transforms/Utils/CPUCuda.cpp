@@ -25,7 +25,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "cpucudapass"
 
-// TODO handle lifetimes if needed?
+// TODO handle lifetimes which get split into different subkernels if needed?
 
 // TODO split the pass in two parts - before and after replacing the dim3 getter
 // calls with arguments, and optimise the code in between
@@ -33,9 +33,10 @@ using namespace llvm;
 // TODO I think we should be passing all dim3's around using pointers - it might
 // be the most ABI stable solution
 
-// TODO fix the malloc (and loop alloca) leaks.......
+// TODO handle dynamic shared mem
 
-static const int MAX_CUDA_THREADS = 1024;
+
+namespace {
 
 using std::vector;
 using std::set;
@@ -55,6 +56,8 @@ typedef vector<Argument *> ArgVector;
 
 typedef int SubkernelIdType;
 typedef int BBIdType;
+
+const int MAX_CUDA_THREADS = 1024;
 
 const vector<std::string> Dim3Names = {
   "gridDim",
@@ -96,29 +99,33 @@ struct UsedValVars {
   InstSet usedSharedVars;
 };
 
+struct {
+  // Whether to use self contained kernel (with included loops for blocks in
+  // grid)
+  bool UseSelfContainedKernel = true;
+  // Do we use a single or triple thread loop NOTE turns out using a linear loop
+  // reduces performance by about a factor of 2
+  bool SingleDimThreadLoop = false;
+  // Do we use malloc or alloca for the preserved data array - I think we
+  // might actually overflow the stack with alloca so should be malloc
+  // TODO Should we malloc the shared data as well?
+  bool MallocPreservedDataArray = true;
+  // Do we allocate for all 1024 threads or only as many as we have run the
+  // kernel with
+  bool DynamicPreservedDataArray = false;
+  // Manually inline the subkernels in the driver function - the optimisations
+  // following this pass should do it anyways if it is deemed profitable
+  bool InlineSubkernels = true;
+  // Actually they always have to be inlined because otherwise we would get
+  // undefined references when linking, so not really an option currently
+  bool InlineDim3Fs = true;
+} Options;
+
+} // anonymous namespace
+
 namespace llvm {
 
 class FunctionTransformer {
-public:
-  struct {
-    // Do we use a single or triple thread loop NOTE turns out this reduces
-    // performance by about a factor of 2
-    bool SingleDimThreadLoop = false;
-    // Do we use malloc or alloca for the preserved data array - I think we
-    // might actually overflow the stack with alloca so should be malloc
-    // TODO Should we malloc the shared data as well?
-    bool MallocPreservedDataArray = true;
-    // Do we allocate for all 1024 threads or only as many as we have run the
-    // kernel with
-    bool DynamicPreservedDataArray = false;
-    // Manually inline the subkernels in the driver function - the optimisations
-    // following this pass should do it anyways if it is deemed profitable
-    bool InlineSubkernels = true;
-    // Actually they always have to be inlined because otherwise we would get
-    // undefined references when linking, so not really an option currently
-    bool InlineDim3Fs = true;
-  } Options;
-
 public:
   Module *M;
   Function *F;
@@ -153,6 +160,7 @@ public:
 
   Function *DriverF;
   Function *WrapperF;
+  Function *SelfContainedF;
 
   // Label type for which BB id we should continue from after we return or we
   // have come from
@@ -189,6 +197,7 @@ public:
   void removeReferencesInPhi(const BBVector &BBsToRemove);
   bool isSharedVar(Instruction &I);
   void createDriverFunction();
+  void createSelfContainedFunction();
   void createWrapperFunction();
   void replaceDim3Usages();
   void getDim3StructType();
@@ -1474,7 +1483,114 @@ void FunctionTransformer::getDim3StructType() {
   Dim3Type = dyn_cast<PointerType>(Dim3PtrType)->getElementType();
 }
 
+void FunctionTransformer::createSelfContainedFunction() {
+  // void __cpucuda_call_kernel_self_contained(
+  //     dim3 grid_dim,
+  //     dim3 block_dim,
+  //     void** args,
+  //     size_t shared_mem);
+  Function *CpucudaCallKernel;
+  assignFunctionWithNameTo(M, CpucudaCallKernel, "__cpucuda_call_kernel_self_contained");
+
+  Function *ArgsToDim3F;
+  assignFunctionWithNameTo(M, ArgsToDim3F, "__cpucuda_coerced_args_to_dim3");
+
+
+  SelfContainedF = Function::Create(CpucudaCallKernel->getFunctionType(), F->getLinkage(),
+                                    F->getAddressSpace(), F->getName(), F->getParent());
+  BasicBlock *EntryBB = BasicBlock::Create(SelfContainedF->getContext(), "entry", SelfContainedF);
+  BasicBlock *ExitBB = BasicBlock::Create(SelfContainedF->getContext(), "exit", SelfContainedF);
+  ReturnInst::Create(M->getContext(), ExitBB);
+
+  ValueVector CallArgs;
+  for (unsigned i = 0; i < OriginalF->getFunctionType()->getNumParams(); i++) {
+    ConstantInt *ArgIdx = ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), i);
+    // TODO Arg position will change with platform ABI
+    auto ArgsPtrArg = SelfContainedF->getArg(4);
+    auto SinglePtrTy = dyn_cast<PointerType>(ArgsPtrArg->getType())->getElementType();
+    auto ArgPtr = GetElementPtrInst::Create(
+        SinglePtrTy,
+        ArgsPtrArg, {ArgIdx}, "cur_ptr", EntryBB);
+    auto ArgPtrLoad = new LoadInst(
+        SinglePtrTy, ArgPtr, "cur_ptr", EntryBB);
+    auto CastArgPtr = new BitCastInst(
+        ArgPtrLoad,
+        PointerType::get(OriginalF->getArg(i)->getType(), SelfContainedF->getAddressSpace()),
+        "cast_cur_ptr", EntryBB);
+    auto Arg = new LoadInst(OriginalF->getArg(i)->getType(), CastArgPtr, "arg", EntryBB);
+    CallArgs.push_back(Arg);
+
+  }
+  // TODO This will change with platform ABI
+  // The two dim3's get passed coalesced
+  vector<CallInst *> CallsToInline;
+  int ArgIdx = 0;
+  for (int Dim3Idx = 0; Dim3Idx < 2; Dim3Idx++) {
+    ValueVector Dim3FArgs;
+    for (unsigned i = 0; i < ArgsToDim3F->getFunctionType()->getNumParams(); i++) {
+      Dim3FArgs.push_back(SelfContainedF->getArg(ArgIdx++));
+    }
+    auto ToDim3 = CallInst::Create(ArgsToDim3F->getFunctionType(), ArgsToDim3F, Dim3FArgs, "dim3", EntryBB);
+    CallArgs.push_back(ToDim3);
+    CallsToInline.push_back(ToDim3);
+  }
+
+  // TODO Args change with ABI
+  ValueVector GridDim3Args = {SelfContainedF->getArg(0), SelfContainedF->getArg(1)};
+  CallInst *GridDimx = CallInst::Create(
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, GridDim3Args,
+      "gridDim_x", EntryBB);
+  CallsToInline.push_back(GridDimx);
+  CallInst *GridDimy = CallInst::Create(
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Gettery, GridDim3Args,
+      "gridDim_y", EntryBB);
+  CallsToInline.push_back(GridDimy);
+  CallInst *GridDimz = CallInst::Create(
+      Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterz, GridDim3Args,
+      "gridDim_z", EntryBB);
+  CallsToInline.push_back(GridDimz);
+
+  // For blocks in grid triple loop
+  ThreadIdxLoop Loopz("_blockIdx_z_", GridDimz, SelfContainedF, this, GridDimx);
+  ThreadIdxLoop Loopy("_blockIdx_y_", GridDimy, SelfContainedF, this, GridDimx);
+  ThreadIdxLoop Loopx("_blockIdx_x_", GridDimx, SelfContainedF, this, GridDimx);
+  Loopz.hookUpBBs(Loopy.EntryBB, Loopy.EndBB);
+  Loopy.hookUpBBs(Loopx.EntryBB, Loopx.EndBB);
+
+  BasicBlock *DriverFCallBB = BasicBlock::Create(DriverF->getContext(), "subkernel_call", SelfContainedF);
+
+  CallInst *BlockIdx = CallInst::Create(
+      Dim3Fs.ConstructorF->getFunctionType(), Dim3Fs.ConstructorF,
+      {Loopx.Idx, Loopy.Idx, Loopz.Idx}, "blockIdx", DriverFCallBB);
+  CallsToInline.push_back(BlockIdx);
+  CallArgs.insert(CallArgs.end() - 1, BlockIdx);
+
+  CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", DriverFCallBB);
+
+  Loopx.hookUpBBs(DriverFCallBB, DriverFCallBB);
+  BranchInst::Create(Loopz.EntryBB, EntryBB);
+  BranchInst::Create(ExitBB, Loopz.EndBB);
+
+  for (auto &F : CallsToInline) {
+    InlineFunctionInfo IFI;
+    InlineResult IR = InlineFunction(*F, IFI);
+    assert(IR.isSuccess() && "Has to be inlined");
+  }
+
+  if (Options.UseSelfContainedKernel)
+    SelfContainedF->takeName(OriginalF);
+
+  // TODO We are leaking the args malloced memory... free it
+
+}
+
 void FunctionTransformer::createWrapperFunction() {
+  // void __cpucuda_call_kernel(
+  //     dim3 grid_dim,
+  //     dim3 block_idx,
+  //     dim3 block_dim,
+  //     void** args,
+  //     size_t shared_mem);
   Function *CpucudaCallKernel;
   assignFunctionWithNameTo(M, CpucudaCallKernel, "__cpucuda_call_kernel");
 
@@ -1540,7 +1656,8 @@ void FunctionTransformer::createWrapperFunction() {
     assert(IR.isSuccess() && "Has to be inlined");
   }
 
-  WrapperF->takeName(OriginalF);
+  if (!Options.UseSelfContainedKernel)
+    WrapperF->takeName(OriginalF);
 
 }
 
@@ -1573,6 +1690,8 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
   createDriverFunction();
 
   createWrapperFunction();
+
+  createSelfContainedFunction();
 }
 
 
@@ -1602,23 +1721,22 @@ void CPUCudaPass::cleanup(Module *M) {
   }
 }
 
-void CPUCudaPass::createCpucudaCallFunction() {
-
-}
-
 void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
   Function *PushF;
   Function *LaunchKernelF;
   assignFunctionWithNameTo(M, PushF, "__cudaPushCallConfiguration");
-  assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernel");
+  // When the compiler does some loop optimisations it sometimes splits the push
+  // function and kernel call in different BBs which complicates converting both
+  // of them to a single cudaLaunchKernel call, keep them separate for now
+  bool convertToLaunchKernel = false;
+  if (convertToLaunchKernel) {
+    assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernel");
+  }
+  if (Options.UseSelfContainedKernel)
+    assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernelSelfContainedWithPushedConfiguration");
+  else
+    assignFunctionWithNameTo(M, LaunchKernelF, "__cpucudaLaunchKernelWithPushedConfiguration");
 
-  /*
-    auto KernelVoidPtr = WrapperF->getArg(0);
-    PointerType *KernelPtrTy = CpucudaCallKernel->getType();
-
-    auto KernelPtr = new BitCastInst(
-    KernelVoidPtr, KernelPtrTy, "kernel_ptr", EntryBB);
-  */
   DataLayout *DL = new DataLayout(M);
 
   // TODO can a user appear twice in the users() if for example it has two
@@ -1636,11 +1754,13 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
 
       CallInst *PushCall;
       Instruction *PrevInst = KernelCall;
-      while (true) {
-        PrevInst = PrevInst->getPrevNonDebugInstruction();
-        PushCall = dyn_cast<CallInst>(PrevInst);
-        if (PushCall && PushCall->getCalledFunction() == PushF)
-          break;
+      if (convertToLaunchKernel) {
+        while (true) {
+          PrevInst = PrevInst->getPrevNonDebugInstruction();
+          PushCall = dyn_cast<CallInst>(PrevInst);
+          if (PushCall && PushCall->getCalledFunction() == PushF)
+            break;
+        }
       }
 
       auto AS = KernelCall->getParent()->getParent()->getAddressSpace();
@@ -1682,33 +1802,45 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
         ArgArrayIdx += DL->getTypeAllocSize(ArgVal->getType());
       }
       ValueVector Args;
+      Function *KernelFunction;
+      if (Options.UseSelfContainedKernel)
+        KernelFunction = FT->SelfContainedF;
+      else
+        KernelFunction = FT->WrapperF;
+
       auto CastWrapperF = new BitCastInst(
-          FT->WrapperF, LaunchKernelF->getArg(0)->getType(), "kernel_bitcast", KernelCall);
+          KernelFunction, LaunchKernelF->getArg(0)->getType(), "kernel_bitcast", KernelCall);
       Args.push_back(CastWrapperF);
       int PushCallArgIdx = 0;
-      // grid dim
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
-      // block dim
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      if (convertToLaunchKernel) {
+        // grid dim
+        Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+        Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+        // block dim
+        Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+        Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+      }
 
       // void **args
       //LoadInst *ArgArrayL = new LoadInst(PointerType::get(Int8PtrTy, AS), ArgArray, "args", KernelCall);
       Args.push_back(ArgPtrArray);
 
-      // share mem size
-      Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
-      // stream
-      auto Stream = PushCall->getArgOperand(PushCallArgIdx++);
-      // TODO the argument number will change depending on ABI I think
-      auto StreamCast = new BitCastInst(
-          Stream, LaunchKernelF->getArg(7)->getType(), "stream_bitcast", KernelCall);
-      Args.push_back(StreamCast);
+      if (convertToLaunchKernel) {
+        // share mem size
+        Args.push_back(PushCall->getArgOperand(PushCallArgIdx++));
+        // stream
+        auto Stream = PushCall->getArgOperand(PushCallArgIdx++);
+        // TODO the argument number will change depending on ABI I think
+        auto StreamCast = new BitCastInst(
+            Stream, LaunchKernelF->getArg(7)->getType(), "stream_bitcast", KernelCall);
+        Args.push_back(StreamCast);
+      }
 
       CallInst::Create(LaunchKernelF->getFunctionType(), LaunchKernelF, Args, "", KernelCall);
 
-      PushCall->eraseFromParent();
+      if (convertToLaunchKernel) {
+        PushCall->eraseFromParent();
+      }
       KernelCall->eraseFromParent();
     } else {
       assert(false && "Unsupported case");
@@ -1741,13 +1873,9 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
   }
 
-  createCpucudaCallFunction();
-
   for (auto &Pair : FunctionTransformers) {
     transformCallSites(Pair.second);
   }
-
-  // TODO we need to rename cudaLaunchKernel I think
 
   cleanup(&M);
 

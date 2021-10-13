@@ -27,7 +27,6 @@ namespace llvm {
 		std::map<Function *, FunctionTransformer *> FunctionTransformers;
 
 		void transformCallSites(FunctionTransformer * FT);
-		void createCpucudaCallFunction();
 
 	public:
 		void cleanup(Module *M);

@@ -36,7 +36,18 @@ extern "C" {
       dim3 block_dim,
       void** args,
       size_t shared_mem);
-
+  void __cpucuda_call_kernel_self_contained(
+      dim3 grid_dim,
+      dim3 block_dim,
+      void** args,
+      size_t shared_mem);
+  cudaError_t __cpucudaLaunchKernelSelfContained(
+      const void* func,
+      dim3 grid_dim,
+      dim3 block_dim,
+      void** args,
+      size_t shared_mem,
+      cudaStream_t stream);
   cudaError_t __cpucudaLaunchKernel(
       const void* func,
       dim3 grid_dim,
@@ -44,10 +55,20 @@ extern "C" {
       void** args,
       size_t shared_mem,
       cudaStream_t stream);
-
+  cudaError_t __cpucudaLaunchKernelSelfContainedWithPushedConfiguration(
+      const void* func,
+      void** args);
+  cudaError_t __cpucudaLaunchKernelWithPushedConfiguration(
+      const void* func,
+      void** args);
   void __cpucuda_declared_function_user() {
+    __cpucudaLaunchKernelWithPushedConfiguration(0, 0);
     __cpucudaLaunchKernel(0, {0,0,0}, {0,0,0}, 0, 0, 0);
     __cpucuda_call_kernel({0,0,0}, {0,0,0}, {0,0,0}, 0, 0);
+
+    __cpucudaLaunchKernelSelfContainedWithPushedConfiguration(0, 0);
+    __cpucudaLaunchKernelSelfContained(0, {0,0,0}, {0,0,0}, 0, 0, 0);
+    __cpucuda_call_kernel_self_contained({0,0,0}, {0,0,0}, 0, 0);
   }
 
 #ifdef __cplusplus
