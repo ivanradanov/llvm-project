@@ -205,7 +205,7 @@ public:
   void getDim3StructType();
   void getDim3Fs();
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
-  void cleanupFunctions();
+  void cleanup();
 
   FunctionTransformer(Module *M, Function *F);
 
@@ -937,19 +937,14 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
-        // If the used val is in the same subkernel replace only if the val does
-        // not already dominate the use - this happens when a subkernel starts
-        // execution after a barrier and a value is passed back to an earlier BB
-        // using a PHI node
-        if (in_vector(SubkernelBBs[SK], dyn_cast<Instruction>(Val)->getParent())) {
-          assert(isa<PHINode>(Val));
-          Val->replaceUsesWithIf(UnpackedVal, [&](Use &U) {
-            Instruction *I = dyn_cast<Instruction>(U.getUser());
-            return !DA.dominates(Val, I);
-          });
-        } else {
-          Val->replaceAllUsesWith(UnpackedVal);
-        }
+        // Replace only if the val does not already dominate the use - sometimes
+        // a value dominates only part of the uses in the subkernel - it happens
+        // for example when a subkernel starts execution after a barrier and a
+        // value is passed back to an earlier BB using a PHI node
+        Val->replaceUsesWithIf(UnpackedVal, [&](Use &U) {
+          Instruction *I = dyn_cast<Instruction>(U.getUser());
+          return !DA.dominates(Val, I);
+        });
         UnpackedVal->takeName(Val);
       }
     }
@@ -970,7 +965,6 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 	        Instruction *I = dyn_cast<Instruction>(U.getUser());
 	        return I->getParent()->getParent() == nf;
         });
-        G->replaceAllUsesWith(Gep);
         Gep->takeName(G);
         // TODO clean up the shared variables when we are done with all subkernels
         // G->eraseFromParent();
@@ -1681,8 +1675,13 @@ void FunctionTransformer::getDim3Fs() {
   assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 }
 
-void FunctionTransformer::cleanupFunctions() {
+void FunctionTransformer::cleanup() {
   OriginalF->eraseFromParent();
+  F->eraseFromParent();
+
+  // Clean up the global shared variables
+  for (GlobalVariable *G : CombinedSharedVars[0])
+	  G->eraseFromParent();
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
@@ -1710,7 +1709,7 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
 void CPUCudaPass::cleanup(Module *M) {
 
   for (auto &Pair : FunctionTransformers) {
-    Pair.second->cleanupFunctions();
+    Pair.second->cleanup();
   }
 
   for (auto &Pair : FunctionTransformers) {
