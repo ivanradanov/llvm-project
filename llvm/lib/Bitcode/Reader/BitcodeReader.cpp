@@ -1442,6 +1442,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::NoReturn;
   case bitc::ATTR_KIND_CPUCUDA_GLOBAL:
 	  return Attribute::CPUCUDAGlobal;
+  case bitc::ATTR_KIND_CPUCUDA_SHARED:
+	  return Attribute::CPUCUDAShared;
   case bitc::ATTR_KIND_NOSYNC:
     return Attribute::NoSync;
   case bitc::ATTR_KIND_NOCF_CHECK:

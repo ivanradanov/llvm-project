@@ -154,8 +154,8 @@ def NonNull : EnumAttr<"nonnull", [ParamAttr, RetAttr]>;
 /// The function does not recurse.
 def NoRecurse : EnumAttr<"norecurse", [FnAttr]>;
 
-/// The function does not recurse.
 def CPUCUDAGlobal : EnumAttr<"cpucuda_global", [FnAttr]>;
+def CPUCUDAShared : EnumAttr<"cpucuda_shared", [FnAttr]>;
 
 /// Disable redzone.
 def NoRedZone : EnumAttr<"noredzone", [FnAttr]>;

@@ -682,6 +682,8 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
     return bitc::ATTR_KIND_NO_RETURN;
   case Attribute::CPUCUDAGlobal:
 	  return bitc::ATTR_KIND_CPUCUDA_GLOBAL;
+  case Attribute::CPUCUDAShared:
+	  return bitc::ATTR_KIND_CPUCUDA_SHARED;
   case Attribute::NoSync:
     return bitc::ATTR_KIND_NOSYNC;
   case Attribute::NoCfCheck:

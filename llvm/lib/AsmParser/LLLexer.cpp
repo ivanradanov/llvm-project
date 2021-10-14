@@ -642,6 +642,7 @@ lltok::Kind LLLexer::LexIdentifier() {
   KEYWORD(cold);
   KEYWORD(convergent);
   KEYWORD(cpucuda_global);
+  KEYWORD(cpucuda_shared);
   KEYWORD(dereferenceable);
   KEYWORD(dereferenceable_or_null);
   KEYWORD(elementtype);

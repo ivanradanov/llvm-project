@@ -181,6 +181,7 @@ enum Kind {
   kw_alwaysinline,
   kw_argmemonly,
   kw_cpucuda_global,
+  kw_cpucuda_shared,
   kw_sanitize_address,
   kw_sanitize_hwaddress,
   kw_sanitize_memtag,

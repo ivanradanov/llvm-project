@@ -409,6 +409,9 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
   if (hasAttribute(Attribute::CPUCUDAGlobal))
 	  return AttrWithBytesToString("cpucuda_global");
 
+  if (hasAttribute(Attribute::CPUCUDAShared))
+	  return AttrWithBytesToString("cpucuda_shared");
+
   if (hasAttribute(Attribute::Dereferenceable))
     return AttrWithBytesToString("dereferenceable");
 

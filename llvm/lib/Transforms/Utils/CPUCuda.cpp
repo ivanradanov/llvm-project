@@ -50,9 +50,11 @@ typedef set<BasicBlock *> BBSet;
 typedef vector<Value *> ValueVector;
 typedef set<Value *> ValueSet;
 typedef set<Instruction *> InstSet;
+typedef set<GlobalVariable *> GlobalVarSet;
 typedef vector<Type *> TypeVector;
 typedef vector<Instruction *> InstVector;
 typedef vector<Argument *> ArgVector;
+typedef vector<GlobalVariable *> GlobalVarVector;
 
 typedef int SubkernelIdType;
 typedef int BBIdType;
@@ -96,7 +98,7 @@ const map<std::string, vector<std::string>> Dim3GetterIntrinsicNames = {
 struct UsedValVars {
   ValueSet usedVals;
   ValueSet definedLater;
-  InstSet usedSharedVars;
+  GlobalVarSet usedSharedVars;
 };
 
 struct {
@@ -145,7 +147,7 @@ public:
   map<SubkernelIdType, BBVector> SubkernelBBs;
   map<SubkernelIdType, Function *> SubkernelFs;
   map<SubkernelIdType, map<SubkernelIdType, ValueVector>> SubkernelUsedVals;
-  map<SubkernelIdType, map<SubkernelIdType, InstVector>> SubkernelUsedSharedVars;
+  map<SubkernelIdType, map<SubkernelIdType, GlobalVarVector>> SubkernelUsedSharedVars;
   map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
   map<BBIdType, BasicBlock *> OriginalFunBBs;
   SubkernelIdType EntrySubkernel;
@@ -154,8 +156,8 @@ public:
   map<SubkernelIdType, ValueVector> CombinedUsedVals;
   StructType *CombinedDataType;
 
-  map<SubkernelIdType, map<Instruction *, int>> IndexInCombinedSharedVarsDataType;
-  map<SubkernelIdType, InstVector> CombinedSharedVars;
+  map<SubkernelIdType, map<GlobalVariable *, int>> IndexInCombinedSharedVarsDataType;
+  map<SubkernelIdType, GlobalVarVector> CombinedSharedVars;
   StructType *SharedVarsDataType;
 
   Function *DriverF;
@@ -195,7 +197,7 @@ public:
   int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
   void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
   void removeReferencesInPhi(const BBVector &BBsToRemove);
-  bool isSharedVar(Instruction &I);
+  bool isSharedVar(GlobalVariable *G);
   void createDriverFunction();
   void createSelfContainedFunction();
   void createWrapperFunction();
@@ -520,13 +522,16 @@ void FunctionTransformer::createSubkernelFunctionClones() {
 void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices) {
   InstVector IV;
   ArgVector AV;
+  GlobalVarVector GV;
   for (auto Val : VV) {
     if (Instruction *I = dyn_cast<Instruction>(Val))
       IV.push_back(I);
     else if (Argument *A = dyn_cast<Argument>(Val))
       AV.push_back(A);
+    else if (GlobalVariable *G = dyn_cast<GlobalVariable>(Val))
+	    GV.push_back(G);
     else
-      assert(false && "Used vals must be only instructions or arguments");
+      assert(false && "Used vals must be only instructions, arguments, or globals");
   }
   std::sort(IV.begin(), IV.end(), [&](Instruction *A, Instruction *B) {
     BasicBlock *BBA = A->getParent();
@@ -541,6 +546,11 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
     return A->getArgNo() < B->getArgNo();
   });
   ValueVector SortedVV;
+  for (auto G : GV) {
+	  Value *Val = static_cast<Value *>(G);
+	  Indices[Val] = SortedVV.size();
+	  SortedVV.push_back(G);
+  }
   for (auto Arg : AV) {
     Value *Val = static_cast<Value *>(Arg);
     Indices[Val] = SortedVV.size();
@@ -554,15 +564,8 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
   VV = SortedVV;
 }
 
-bool FunctionTransformer::isSharedVar(Instruction &I) {
-  auto *Metadata = I.getMetadata(LLVMContext::MD_annotation);
-  if (Metadata) {
-    auto *Tuple = cast<MDTuple>(Metadata);
-    for (auto &N : Tuple->operands())
-      if (cast<MDString>(N.get())->getString() == "cpucuda_shared")
-        return true;
-  }
-  return false;
+bool FunctionTransformer::isSharedVar(GlobalVariable *G) {
+	return G->hasAttribute(Attribute::CPUCUDAShared);
 }
 
 // TODO test this function
@@ -587,12 +590,12 @@ UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB
       // We don't want Constants or Undef values
       Instruction *UseI = dyn_cast<Instruction>(v);
       // Do not add arguments as we will keep them in the subkernels
-      if (UseI) {
-        if (isSharedVar(*UseI))
-          usedVals.usedSharedVars.insert(UseI);
-        else if (!in_set(definedVals, v))
-          usedVals.usedVals.insert(v);
-      }
+      if (UseI && !in_set(definedVals, v))
+        usedVals.usedVals.insert(v);
+      GlobalVariable *UseG = dyn_cast<GlobalVariable>(v);
+      if (UseG && isSharedVar(UseG))
+	      usedVals.usedSharedVars.insert(UseG);
+
     }
   }
 
@@ -622,7 +625,7 @@ void FunctionTransformer::findSubkernelUsedVals() {
       BasicBlock *_SKEntryBB = convertBasicBlock(SubkernelBBs[_SK][0], SubkernelFs[_SK], SubkernelFs[SK]);
       UsedValVars UsedVals = findUsedVals(SK, _SKEntryBB, ValueSet(), BBVector());
       SubkernelUsedVals[SK][_SK] = ValueVector(UsedVals.usedVals.begin(), UsedVals.usedVals.end());
-      SubkernelUsedSharedVars[SK][_SK] = InstVector(UsedVals.usedSharedVars.begin(), UsedVals.usedSharedVars.end());
+      SubkernelUsedSharedVars[SK][_SK] = GlobalVarVector(UsedVals.usedSharedVars.begin(), UsedVals.usedSharedVars.end());
 
       for (auto Val : UsedVals.usedVals) {
         if (!in_vector(CombinedUsedVals, Val)) {
@@ -637,16 +640,16 @@ void FunctionTransformer::findSubkernelUsedVals() {
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
 
     ValueVector CombinedSharedVars;
-    for (Instruction *I : this->CombinedSharedVars[SK])
-      CombinedSharedVars.push_back(I);
+    for (GlobalVariable *G : this->CombinedSharedVars[SK])
+      CombinedSharedVars.push_back(G);
     map<Value *, int> IndexInCombinedSharedVarsDataType;
     sortValueVector(SK, CombinedSharedVars, IndexInCombinedSharedVarsDataType);
     for (auto &pair : IndexInCombinedSharedVarsDataType) {
       auto Val = pair.first;
       auto Index = pair.second;
-      Instruction *I = dyn_cast<Instruction>(Val);
-      assert(I);
-      this->IndexInCombinedSharedVarsDataType[SK][I] = Index;
+      GlobalVariable *G = dyn_cast<GlobalVariable>(Val);
+      assert(G);
+      this->IndexInCombinedSharedVarsDataType[SK][G] = Index;
     }
   }
 
@@ -957,15 +960,20 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
       auto It = usedSharedVars.begin(), E = usedSharedVars.end();
       // Unpack args from data struct param and replace usages with them
       for (unsigned i = 0; It != E; ++It, ++i) {
-        Instruction *I = (*It);
+        GlobalVariable *G = (*It);
         ConstantInt *Index = ConstantInt::get(
-            GepIndexType, IndexInCombinedSharedVarsDataType[SK][I]);
+            GepIndexType, IndexInCombinedSharedVarsDataType[SK][G]);
         // The third argument of the function is the structure of shared variables
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
-        I->replaceAllUsesWith(Gep);
-        Gep->takeName(I);
-        I->eraseFromParent();
+        G->replaceUsesWithIf(Gep, [&](Use &U) {
+	        Instruction *I = dyn_cast<Instruction>(U.getUser());
+	        return I->getParent()->getParent() == nf;
+        });
+        G->replaceAllUsesWith(Gep);
+        Gep->takeName(G);
+        // TODO clean up the shared variables when we are done with all subkernels
+        // G->eraseFromParent();
       }
     }
 
@@ -1059,16 +1067,20 @@ void FunctionTransformer::findSharedVars() {
   for (auto SK : SubkernelIds) {
     for (auto &BB : *SubkernelFs[SK]) {
       for (auto &I : BB) {
-        if (isSharedVar(I))
-          CombinedSharedVars[SK].push_back(&I);
+	      for (Use &U : I.operands()) {
+		      Value *V = U.get();
+		      GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
+		      if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars[SK], UseG))
+            CombinedSharedVars[SK].push_back(UseG);
+        }
       }
     }
   }
 
   TypeVector Types;
-  for (auto I : CombinedSharedVars[0]) {
-    assert(isa<AllocaInst>(I));
-    Types.push_back(dyn_cast<AllocaInst>(I)->getAllocatedType());
+  for (auto G : CombinedSharedVars[0]) {
+	  assert(isa<PointerType>(G->getType()));
+	  Types.push_back(dyn_cast<PointerType>(G->getType())->getPointerElementType());
   }
   SharedVarsDataType = StructType::get(M->getContext(), Types);
 }

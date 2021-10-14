@@ -429,6 +429,10 @@ void CodeGenFunction::EmitStaticVarDecl(const VarDecl &D,
   if (D.getInit() && !isCudaSharedVar && !(getLangOpts().CPUCUDA && D.hasAttr<CUDASharedAttr>()))
     var = AddInitializerToStaticVarDecl(D, var);
 
+  // CPUCUDA
+  if (getLangOpts().CUDA && D.hasAttr<CUDASharedAttr>())
+    var->addAttribute(llvm::Attribute::CPUCUDAShared);
+
   var->setAlignment(alignment.getAsAlign());
 
   if (D.hasAttr<AnnotateAttr>())
@@ -1529,15 +1533,6 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // builds.
       address = CreateTempAlloca(allocaTy, allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
-
-      // TODO is this the only place where we have to tag cpucuda shared memory?
-      // What about global shared variables of form 'extern __shared__ Foo
-      // foo[]'?
-      if (getLangOpts().CPUCUDA && D.hasAttr<CUDASharedAttr>()) {
-	      llvm::AllocaInst *AllocaInst = dyn_cast<llvm::AllocaInst>(AllocaAddr.getPointer());
-	      assert(AllocaInst);
-        AllocaInst->addAnnotationMetadata("cpucuda_shared");
-      }
 
       // Don't emit lifetime markers for MSVC catch parameters. The lifetime of
       // the catch parameter starts in the catchpad instruction, and we can't

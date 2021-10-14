@@ -940,6 +940,7 @@ Function *CodeExtractor::constructFunction(const ValueSet &inputs,
       case Attribute::EmptyKey:
       case Attribute::TombstoneKey:
       case Attribute::CPUCUDAGlobal:
+      case Attribute::CPUCUDAShared:
         continue;
       // Those attributes should be safe to propagate to the extracted function.
       case Attribute::AlwaysInline:

@@ -672,6 +672,7 @@ enum AttributeKindCodes {
   ATTR_KIND_NO_SANITIZE_COVERAGE = 76,
   ATTR_KIND_ELEMENTTYPE = 77,
   ATTR_KIND_CPUCUDA_GLOBAL = 78,
+  ATTR_KIND_CPUCUDA_SHARED = 79,
 };
 
 enum ComdatSelectionKindCodes {
