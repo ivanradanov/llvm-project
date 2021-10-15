@@ -180,7 +180,7 @@ public:
   bool blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB);
   void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
   UsedValVars findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
-  void findSubkernelUsedVals();
+  void findSubkernelUsedValsDom();
   SubkernelIdType findSubkernelFromBB(BBIdType BB);
   void createSubkernelFunctionClones();
   set<SubkernelIdType> getSubkernelSuccessors(SubkernelIdType SK);
@@ -568,80 +568,109 @@ bool FunctionTransformer::isSharedVar(GlobalVariable *G) {
 	return G->hasAttribute(Attribute::CPUCUDAShared);
 }
 
-// TODO test this function
+class DomAnalysis {
+public:
+  SubkernelIdType SK;
+  FunctionTransformer *Pass;
+  Function *F;
+  ValueToValueMapTy VMap;
+  std::unique_ptr<DominatorTree> DomTree;
 
-// I am not sure whether the order in which we visit the BBs might affect the
-// result - PHINode related problems?
-UsedValVars FunctionTransformer::findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited) {
-  UsedValVars usedVals;
+  DomAnalysis(SubkernelIdType SK, SubkernelIdType _SK, FunctionTransformer *Pass):
+      SK(SK), Pass(Pass) {
 
-  if (in_vector(visited, BB))
-    return usedVals;
-  visited.push_back(BB);
+    Function *OriginalF = Pass->SubkernelFs[SK];
 
-  // Find all values which were not yet defined but are used
-  for (auto &I : *BB) {
-    definedVals.insert(&I);
-    if (in_set(usedVals.usedVals, static_cast<Value *>(&I)))
-      usedVals.definedLater.insert(&I);
-    for (Use &U : I.operands()) {
-      Value *v = U.get();
-      // TODO is that all the cases?
-      // We don't want Constants or Undef values
-      Instruction *UseI = dyn_cast<Instruction>(v);
-      // Do not add arguments as we will keep them in the subkernels
-      if (UseI && !in_set(definedVals, v))
-        usedVals.usedVals.insert(v);
-      GlobalVariable *UseG = dyn_cast<GlobalVariable>(v);
-      if (UseG && isSharedVar(UseG))
-	      usedVals.usedSharedVars.insert(UseG);
+    // Clone the function to get a clone of the basic blocks
+    F = CloneFunction(OriginalF, VMap);
 
-    }
-  }
+    BasicBlock *_OriginalEntryBB = convertBasicBlock(Pass->SubkernelBBs[_SK][0], Pass->SubkernelFs[_SK], Pass->SubkernelFs[SK]);
+    BasicBlock *OriginalEntryBB = convertBasicBlock(_OriginalEntryBB, OriginalF, F);
 
-  // Recursively do the same for all basic blocks in the same subkernel
-  for (auto Succ : successors(BB)) {
-    if (blockIsAfterBarrier(SK, Succ))
-      continue;
-    UsedValVars _usedVals = findUsedVals(SK, Succ, definedVals, visited);
-    usedVals.usedVals.insert(_usedVals.usedVals.begin(), _usedVals.usedVals.end());
-    usedVals.usedSharedVars.insert(_usedVals.usedSharedVars.begin(), _usedVals.usedSharedVars.end());
-    usedVals.definedLater.insert(_usedVals.definedLater.begin(), _usedVals.definedLater.end());
-  }
-
-  return usedVals;
-}
-
-// I don't like this implementation (that it needs sorting), find something
-// better if possible
-
-// Currently only tracks registers and not values written to memory
-void FunctionTransformer::findSubkernelUsedVals() {
-  for (auto SK : SubkernelIds) {
-    // Find values which persist across executions of different subkernels
-    ValueVector CombinedUsedVals;
-    for (auto _SK : SubkernelIds) {
-      // Convert references of basic blocks to the cloned function
-      BasicBlock *_SKEntryBB = convertBasicBlock(SubkernelBBs[_SK][0], SubkernelFs[_SK], SubkernelFs[SK]);
-      UsedValVars UsedVals = findUsedVals(SK, _SKEntryBB, ValueSet(), BBVector());
-      SubkernelUsedVals[SK][_SK] = ValueVector(UsedVals.usedVals.begin(), UsedVals.usedVals.end());
-      SubkernelUsedSharedVars[SK][_SK] = GlobalVarVector(UsedVals.usedSharedVars.begin(), UsedVals.usedSharedVars.end());
-
-      for (auto Val : UsedVals.usedVals) {
-        if (!in_vector(CombinedUsedVals, Val)) {
-          CombinedUsedVals.push_back(Val);
+    // Remove all branch instructions jumping to blocks after barriers
+    for (auto &BB : *OriginalF) {
+      if (Pass->blockIsAfterBarrier(SK, &BB)) {
+        BasicBlock *NewBB = dyn_cast<BasicBlock>(&*VMap[&BB]);
+        // There is only one unconditional predecessor because a block after a
+        // barrier should be the result of SplitBlock()
+        BasicBlock *PredBB = NewBB->getSinglePredecessor();
+        assert(PredBB && "Block after a barrier must have a single predecessor");
+        Instruction *Term = PredBB->getTerminator();
+        if (auto Branch = dyn_cast<BranchInst>(Term)) {
+          Branch->eraseFromParent();
+          ReturnInst::Create(PredBB->getContext(), nullptr, PredBB);
+        } else {
+          assert(false && "Block after a barrier cannot be jumped to by anything other than an unconditional branch");
         }
       }
     }
 
+    // Make the original entry bb the entry
+    BasicBlock *EntryBB = BasicBlock::Create(F->getContext(), "generated_entry_block", F, &F->getEntryBlock());
+    BranchInst::Create(OriginalEntryBB, EntryBB);
+
+    DomTree.reset(new DominatorTree(*F));
+  }
+
+  DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
+      DomAnalysis(SK, SK, Pass) {}
+
+  bool dominates(Instruction *ValD, Instruction *User) {
+    return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
+  }
+
+  ~DomAnalysis() {
+    F->eraseFromParent();
+  }
+
+};
+
+// Currently only tracks registers and not values written to memory
+void FunctionTransformer::findSubkernelUsedValsDom() {
+  for (auto SK : SubkernelIds) {
+    ValueVector CombinedUsedInsts;
+    for (auto _SK : SubkernelIds) {
+      DomAnalysis DA(SK, _SK, this);
+      ValueSet UsedInsts;
+      GlobalVarSet UsedSharedVars;
+      for (auto &BB : *SubkernelFs[SK]) {
+        BasicBlock *ConvertedBB = convertBasicBlock(&BB, SubkernelFs[SK], SubkernelFs[_SK]);
+        if (in_vector(SubkernelBBs[_SK], ConvertedBB)) {
+          for (auto &I : BB) {
+            for (Use &U : I.operands()) {
+              Value *V = U.get();
+              Instruction *UseI = dyn_cast<Instruction>(V);
+              GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
+              if (UseI && !DA.dominates(UseI, &I)) {
+                UsedInsts.insert(V);
+              } else if (UseG && isSharedVar(UseG)) {
+                UsedSharedVars.insert(UseG);
+              }
+            }
+          }
+        }
+      }
+
+      SubkernelUsedVals[SK][_SK] = ValueVector(UsedInsts.begin(), UsedInsts.end());
+      SubkernelUsedSharedVars[SK][_SK] = GlobalVarVector(UsedSharedVars.begin(), UsedSharedVars.end());
+
+      for (auto I : UsedInsts)
+        if (!in_vector(CombinedUsedInsts, I))
+          CombinedUsedInsts.push_back(I);
+
+    }
+
     map<Value *, int> IndexInCombinedDataType;
-    sortValueVector(SK, CombinedUsedVals, IndexInCombinedDataType);
-    this->CombinedUsedVals[SK] = CombinedUsedVals;
+    sortValueVector(SK, CombinedUsedInsts, IndexInCombinedDataType);
+    this->CombinedUsedVals[SK] = CombinedUsedInsts;
     this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
 
+    // TODO make the sortValueVector function templated so we dont need to
+    // convert vectors around
     ValueVector CombinedSharedVars;
     for (GlobalVariable *G : this->CombinedSharedVars[SK])
       CombinedSharedVars.push_back(G);
+
     map<Value *, int> IndexInCombinedSharedVarsDataType;
     sortValueVector(SK, CombinedSharedVars, IndexInCombinedSharedVarsDataType);
     for (auto &pair : IndexInCombinedSharedVarsDataType) {
@@ -652,7 +681,6 @@ void FunctionTransformer::findSubkernelUsedVals() {
       this->IndexInCombinedSharedVarsDataType[SK][G] = Index;
     }
   }
-
   vector<StructType *> CombinedDataTypes;
   for (auto SK : SubkernelIds) {
     ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
@@ -783,59 +811,6 @@ void FunctionTransformer::removeReferencesInPhi(const BBVector &BBsToRemove) {
   }
 }
 
-class DomAnalysis {
-public:
-  SubkernelIdType SK;
-  FunctionTransformer *Pass;
-  Function *F;
-  ValueToValueMapTy VMap;
-  std::unique_ptr<DominatorTree> DomTree;
-
-  DomAnalysis(SubkernelIdType SK, FunctionTransformer *Pass):
-      SK(SK), Pass(Pass) {
-
-    Function *OriginalF = Pass->SubkernelFs[SK];
-
-    // Clone the function to get a clone of the basic blocks
-    F = CloneFunction(OriginalF, VMap);
-
-    BasicBlock *OriginalEntryBB = convertBasicBlock(Pass->SubkernelBBs[SK][0], OriginalF, F);
-
-    // Remove all branch instructions jumping to blocks after barriers
-    for (auto &BB : *OriginalF) {
-      if (Pass->blockIsAfterBarrier(SK, &BB)) {
-        BasicBlock *NewBB = dyn_cast<BasicBlock>(&*VMap[&BB]);
-        // There is only one unconditional predecessor because a block after a
-        // barrier should be the result of SplitBlock()
-        BasicBlock *PredBB = NewBB->getSinglePredecessor();
-        assert(PredBB && "Block after a barrier must have a single predecessor");
-        Instruction *Term = PredBB->getTerminator();
-        if (auto Branch = dyn_cast<BranchInst>(Term)) {
-          Branch->eraseFromParent();
-          ReturnInst::Create(PredBB->getContext(), nullptr, PredBB);
-        } else {
-          assert(false && "Block after a barrier cannot be jumped to by anything other than an unconditional branch");
-        }
-      }
-    }
-
-    // Make the original entry bb the entry
-    BasicBlock *EntryBB = BasicBlock::Create(F->getContext(), "generated_entry_block", F, &F->getEntryBlock());
-    BranchInst::Create(OriginalEntryBB, EntryBB);
-
-    DomTree.reset(new DominatorTree(*F));
-  }
-
-  bool dominates(Value *ValD, Instruction *User) {
-    return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
-  }
-
-  ~DomAnalysis() {
-    F->eraseFromParent();
-  }
-
-};
-
 // TODO optimise when usedVals gets populated by simple struct member accesses,
 // for example, currently accesses of dim3 members get added to usedVals
 void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
@@ -943,7 +918,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         // value is passed back to an earlier BB using a PHI node
         Val->replaceUsesWithIf(UnpackedVal, [&](Use &U) {
           Instruction *I = dyn_cast<Instruction>(U.getUser());
-          return !DA.dominates(Val, I);
+          return !DA.dominates(dyn_cast<Instruction>(Val), I);
         });
         UnpackedVal->takeName(Val);
       }
@@ -1164,7 +1139,7 @@ void FunctionTransformer::createSubkernels() {
   createSubkernelFunctionClones();
   assignBBIds();
   findSharedVars();
-  findSubkernelUsedVals();
+  findSubkernelUsedValsDom();
   SubkernelReturnType = getSubkernelsReturnType();
   for (auto SK : SubkernelIds) {
     transformSubkernels(SK);
