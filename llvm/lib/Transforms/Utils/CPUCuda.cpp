@@ -15,6 +15,7 @@
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/Analysis/TargetTransformInfo.h"
 
 #include <queue>
 #include <vector>
@@ -60,6 +61,8 @@ typedef int SubkernelIdType;
 typedef int BBIdType;
 
 const int MAX_CUDA_THREADS = 1024;
+
+const TargetTransformInfo::TargetCostKind TARGET_COST_KIND = TargetTransformInfo::TCK_RecipThroughput;
 
 const vector<std::string> Dim3Names = {
   "gridDim",
@@ -130,6 +133,8 @@ namespace llvm {
 class FunctionTransformer {
 public:
   Module *M;
+	TargetTransformInfo *TTI;
+
   Function *F;
   Function *OriginalF;
 
@@ -200,6 +205,7 @@ public:
   bool isSharedVar(GlobalVariable *G);
   void createDriverFunction();
   void createSelfContainedFunction();
+	void optimizeUsedVals();
   void createWrapperFunction();
   void replaceDim3Usages();
   void getDim3StructType();
@@ -207,7 +213,7 @@ public:
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
   void cleanup();
 
-  FunctionTransformer(Module *M, Function *F);
+	FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI);
 
 };
 
@@ -1132,6 +1138,63 @@ void FunctionTransformer::replaceDim3Usages() {
     }
 }
 
+bool dependsOnInsts(Instruction *I) {
+	for (Use &U : I->operands()) {
+		Value *V = U.get();
+		if (isa<Instruction>(V))
+			return true;
+	}
+	return false;
+}
+
+InstructionCost instCostFromArgs(Instruction *I, TargetTransformInfo *TTI) {
+	InstructionCost Cost = TTI->getInstructionCost(I, TARGET_COST_KIND);
+  for (Use &U : I->operands()) {
+    Value *V = U.get();
+    if (auto UseI = dyn_cast<Instruction>(V))
+	    Cost += instCostFromArgs(UseI, TTI);
+  }
+  return Cost;
+}
+
+InstructionCost getStoreCost(Instruction *I, TargetTransformInfo *TTI) {
+	auto Store = new StoreInst(
+			I, ConstantPointerNull::get(PointerType::get(I->getType(), I->getParent()->getParent()->getAddressSpace())), I);
+  InstructionCost IC = TTI->getInstructionCost(Store, TARGET_COST_KIND);
+	Store->eraseFromParent();
+	return IC;
+}
+
+InstructionCost getLoadCost(Instruction *I, TargetTransformInfo *TTI) {
+  auto Load = new LoadInst(
+      I->getType(),
+      ConstantPointerNull::get(PointerType::get(I->getType(), I->getParent()->getParent()->getAddressSpace())),
+      "",
+      I);
+  InstructionCost IC = TTI->getInstructionCost(Load, TARGET_COST_KIND);
+  Load->eraseFromParent();
+  return IC;
+}
+
+void FunctionTransformer::optimizeUsedVals() {
+  for (auto SK : SubkernelIds) {
+	  for (auto V : SubkernelUsedVals[SK][SK]) {
+		  auto I = dyn_cast<Instruction>(V);
+		  // If it purely depends on the arguments and global variables
+      if (!dependsOnInsts(I)) {
+	      auto RecalculationCost = instCostFromArgs(I, TTI);
+	      auto StoreCost = getStoreCost(I, TTI);
+	      auto LoadCost = getLoadCost(I, TTI);
+	      int ExpectedLoadCount = 1;
+	      int ExpectedStoreCount = 1;
+
+	      if (ExpectedStoreCount * StoreCost + ExpectedLoadCount * LoadCost)
+		      ;
+      }
+    }
+  }
+}
+
 void FunctionTransformer::createSubkernels() {
   replaceDim3Usages();
   splitBlocksAroundBarriers(*F);
@@ -1140,6 +1203,7 @@ void FunctionTransformer::createSubkernels() {
   assignBBIds();
   findSharedVars();
   findSubkernelUsedValsDom();
+  optimizeUsedVals();
   SubkernelReturnType = getSubkernelsReturnType();
   for (auto SK : SubkernelIds) {
     transformSubkernels(SK);
@@ -1659,9 +1723,10 @@ void FunctionTransformer::cleanup() {
 	  G->eraseFromParent();
 }
 
-FunctionTransformer::FunctionTransformer(Module *M, Function *F) {
+FunctionTransformer::FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI) {
   this->M = M;
   this->F = F;
+  this->TTI = TTI;
 
   LLVMBBIdType = IntegerType::getInt32Ty(M->getContext());
   LLVMSubkernelIdType = IntegerType::getInt32Ty(M->getContext());
@@ -1837,6 +1902,7 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
   this->M = &M;
+  TTI = &AM.getResult<TargetIRAnalysis>(M);
 
   vector<Function *> OriginalFs;
 
@@ -1855,7 +1921,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
 
-    FunctionTransformers[&F] = new FunctionTransformer(&M, &F);
+    FunctionTransformers[&F] = new FunctionTransformer(&M, &F, TTI);
 
   }
 

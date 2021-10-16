@@ -18,21 +18,24 @@
 
 namespace llvm {
 
-	class FunctionTransformer;
+class FunctionTransformer;
+class TargetTransformInfo;
 
-	class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
-	private:
-		Module *M;
+class CPUCudaPass : public PassInfoMixin<CPUCudaPass> {
+private:
+  Module *M;
+  TargetTransformInfo *TTI;
 
-		std::map<Function *, FunctionTransformer *> FunctionTransformers;
 
-		void transformCallSites(FunctionTransformer * FT);
+  std::map<Function *, FunctionTransformer *> FunctionTransformers;
 
-	public:
-		void cleanup(Module *M);
-		PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
+  void transformCallSites(FunctionTransformer * FT);
 
-	};
+public:
+  void cleanup(Module *M);
+  PreservedAnalyses run(Module &M, AnalysisManager<Module> &AM);
+
+};
 
 } // namespace llvm
 
