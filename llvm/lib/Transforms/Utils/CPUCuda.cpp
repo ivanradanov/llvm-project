@@ -1191,40 +1191,41 @@ void FunctionTransformer::optimizeUsedVals() {
   //map<SubkernelIdType, map<int, InstructionCost>> RecalcBenefit;
 
   for (auto SK : SubkernelIds) {
-    ValueVector UsedValsToRemove;
-    for (auto V : SubkernelUsedVals[SK][SK]) {
-      auto I = dyn_cast<Instruction>(V);
-      // If it purely depends on the arguments and global variables
-      if (!dependsOnInsts(I)) {
+    for (auto _SK : SubkernelIds) {
+      ValueVector UsedValsToRemove;
+      for (auto V : SubkernelUsedVals[SK][_SK]) {
+        auto I = dyn_cast<Instruction>(V);
+        // If it purely depends on the arguments and global variables
+        if (!dependsOnInsts(I)) {
 #ifdef COST_ANALYSIS
-        auto RecalculationCost = instCostFromArgs(I, TTI);
-        auto StoreCost = getStoreCost(I, TTI);
-        auto LoadCost = getLoadCost(I, TTI);
-        int ExpectedLoadCount = 1;
-        int ExpectedStoreCount = 1;
+          auto RecalculationCost = instCostFromArgs(I, TTI);
+          auto StoreCost = getStoreCost(I, TTI);
+          auto LoadCost = getLoadCost(I, TTI);
+          int ExpectedLoadCount = 1;
+          int ExpectedStoreCount = 1;
 
-        // TODO think about this more
-        if (ExpectedStoreCount * StoreCost + ExpectedLoadCount * LoadCost >= ExpectedLoadCount * RecalculationCost) {
-          recalculateArgOnlyInstAfterBarrier(I);
-        }
-#endif
-        // Recalculate the usedVal just before each use, the following
-        // optimization passes should (hopefully, TODO check) optimize away the unneeded
-        // ones
-        for (Use &U : I->operands()) {
-          Value *V = U.get();
-          if (auto UseI = dyn_cast<Instruction>(V)) {
-            auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, UseI);
-            ValueToValueMapTy VMap;
-            VMap[V] = RecalcdUsedVal;
-            RemapInstruction(UseI, VMap);
+          // TODO think about this more
+          if (ExpectedStoreCount * StoreCost + ExpectedLoadCount * LoadCost >= ExpectedLoadCount * RecalculationCost) {
+            recalculateArgOnlyInstAfterBarrier(I);
           }
+#endif
+          // Recalculate the usedVal just before each use, the following
+          // optimization passes should (hopefully, TODO check) optimize away
+          // the unneeded ones
+          for (User *U : I->users()) {
+            if (auto UserI = dyn_cast<Instruction>(U)) {
+              auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, UserI);
+              ValueToValueMapTy VMap;
+              VMap[I] = RecalcdUsedVal;
+              RemapInstruction(UserI, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+            }
+          }
+          UsedValsToRemove.push_back(V);
         }
-        UsedValsToRemove.push_back(V);
-      }
-      for (auto V : UsedValsToRemove) {
-        auto &Vec = SubkernelUsedVals[SK][SK];
-        Vec.erase(std::find(Vec.begin(), Vec.end(), V));
+        for (auto V : UsedValsToRemove) {
+          auto &Vec = SubkernelUsedVals[SK][_SK];
+          std::remove(Vec.begin(), Vec.end(), V);
+        }
       }
     }
   }
@@ -1268,7 +1269,7 @@ void FunctionTransformer::createSubkernels() {
   assignBBIds();
   findSharedVars();
   findSubkernelUsedValsDom();
-  //optimizeUsedVals();
+  optimizeUsedVals();
   indexUsedVals();
   SubkernelReturnType = getSubkernelsReturnType();
   for (auto SK : SubkernelIds) {
