@@ -108,7 +108,7 @@ struct UsedValVars {
 struct {
   // Whether to use self contained kernel (with included loops for blocks in
   // grid)
-  bool UseSelfContainedKernel = true;
+  bool UseSelfContainedKernel = false;
   // Do we use a single or triple thread loop NOTE turns out using a linear loop
   // reduces performance by about a factor of 2
   bool SingleDimThreadLoop = false;
@@ -153,7 +153,6 @@ public:
   map<SubkernelIdType, BBVector> SubkernelBBs;
   map<SubkernelIdType, Function *> SubkernelFs;
   map<SubkernelIdType, map<SubkernelIdType, ValueVector>> SubkernelUsedVals;
-  map<SubkernelIdType, map<SubkernelIdType, GlobalVarVector>> SubkernelUsedSharedVars;
   map<SubkernelIdType, map<BasicBlock *, BBIdType>> SubkernelBBIds;
   map<BBIdType, BasicBlock *> OriginalFunBBs;
   SubkernelIdType EntrySubkernel;
@@ -162,8 +161,8 @@ public:
   map<SubkernelIdType, ValueVector> CombinedUsedVals;
   StructType *CombinedDataType;
 
-  map<SubkernelIdType, map<GlobalVariable *, int>> IndexInCombinedSharedVarsDataType;
-  map<SubkernelIdType, GlobalVarVector> CombinedSharedVars;
+  map<GlobalVariable *, int> IndexInCombinedSharedVarsDataType;
+  GlobalVarVector CombinedSharedVars;
   StructType *SharedVarsDataType;
 
   Function *DriverF;
@@ -639,7 +638,6 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
     for (auto _SK : SubkernelIds) {
       DomAnalysis DA(SK, _SK, this);
       ValueSet UsedInsts;
-      GlobalVarSet UsedSharedVars;
       for (auto &BB : *SubkernelFs[SK]) {
         BasicBlock *ConvertedBB = convertBasicBlock(&BB, SubkernelFs[SK], SubkernelFs[_SK]);
         if (in_vector(SubkernelBBs[_SK], ConvertedBB)) {
@@ -647,11 +645,8 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
             for (Use &U : I.operands()) {
               Value *V = U.get();
               Instruction *UseI = dyn_cast<Instruction>(V);
-              GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
               if (UseI && !DA.dominates(UseI, &I)) {
                 UsedInsts.insert(V);
-              } else if (UseG && isSharedVar(UseG)) {
-                UsedSharedVars.insert(UseG);
               }
             }
           }
@@ -659,24 +654,7 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
       }
 
       SubkernelUsedVals[SK][_SK] = ValueVector(UsedInsts.begin(), UsedInsts.end());
-      SubkernelUsedSharedVars[SK][_SK] = GlobalVarVector(UsedSharedVars.begin(), UsedSharedVars.end());
 
-    }
-
-    // TODO make the sortValueVector function templated so we dont need to
-    // convert vectors around
-    ValueVector CombinedSharedVars;
-    for (GlobalVariable *G : this->CombinedSharedVars[SK])
-      CombinedSharedVars.push_back(G);
-
-    map<Value *, int> IndexInCombinedSharedVarsDataType;
-    sortValueVector(SK, CombinedSharedVars, IndexInCombinedSharedVarsDataType);
-    for (auto &pair : IndexInCombinedSharedVarsDataType) {
-      auto Val = pair.first;
-      auto Index = pair.second;
-      GlobalVariable *G = dyn_cast<GlobalVariable>(Val);
-      assert(G);
-      this->IndexInCombinedSharedVarsDataType[SK][G] = Index;
     }
   }
 }
@@ -911,14 +889,14 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
     {
       // TODO remove usedsharedvars for individual SKs
-      auto usedSharedVars = CombinedSharedVars[SK];
+      auto usedSharedVars = CombinedSharedVars;
       // Transfer usages of the used shared vars to the arguments to the function
       auto It = usedSharedVars.begin(), E = usedSharedVars.end();
       // Unpack args from data struct param and replace usages with them
       for (unsigned i = 0; It != E; ++It, ++i) {
         GlobalVariable *G = (*It);
         ConstantInt *Index = ConstantInt::get(
-            GepIndexType, IndexInCombinedSharedVarsDataType[SK][G]);
+            GepIndexType, IndexInCombinedSharedVarsDataType[G]);
         // The third argument of the function is the structure of shared variables
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
@@ -1017,27 +995,30 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 }
 
 void FunctionTransformer::findSharedVars() {
-  // TODO find where variable Alloca's are getting optimised out and disable it
-  // for shared vars (NOTE it is the mem2reg pass I believe)
-  for (auto SK : SubkernelIds) {
-    for (auto &BB : *SubkernelFs[SK]) {
-      for (auto &I : BB) {
-        for (Use &U : I.operands()) {
-          Value *V = U.get();
-          GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
-          if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars[SK], UseG))
-            CombinedSharedVars[SK].push_back(UseG);
-        }
+  auto SK = 0;
+  for (auto &BB : *SubkernelFs[SK]) {
+    for (auto &I : BB) {
+      for (Use &U : I.operands()) {
+        Value *V = U.get();
+        GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
+        if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars, UseG))
+          CombinedSharedVars.push_back(UseG);
       }
     }
   }
 
   TypeVector Types;
-  for (auto G : CombinedSharedVars[0]) {
+  for (auto G : CombinedSharedVars) {
     assert(isa<PointerType>(G->getType()));
     Types.push_back(dyn_cast<PointerType>(G->getType())->getPointerElementType());
   }
   SharedVarsDataType = StructType::get(M->getContext(), Types);
+
+  int Index = 0;
+  for (auto G : CombinedSharedVars) {
+	  IndexInCombinedSharedVarsDataType[G] = Index;
+	  Index++;
+  }
 }
 
 void FunctionTransformer::replaceDim3Usages() {
@@ -1797,7 +1778,7 @@ void FunctionTransformer::cleanup() {
   F->eraseFromParent();
 
   // Clean up the global shared variables
-  for (GlobalVariable *G : CombinedSharedVars[0])
+  for (GlobalVariable *G : CombinedSharedVars)
     G->eraseFromParent();
 }
 
