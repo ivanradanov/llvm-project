@@ -15,6 +15,7 @@
 #include "llvm/IR/InstVisitor.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Dominators.h"
+#include "llvm/IR/Verifier.h"
 #include "llvm/Analysis/TargetTransformInfo.h"
 
 #include <queue>
@@ -909,7 +910,8 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     }
 
     {
-      auto usedSharedVars = SubkernelUsedSharedVars[SK][SK];
+      // TODO remove usedsharedvars for individual SKs
+      auto usedSharedVars = CombinedSharedVars[SK];
       // Transfer usages of the used shared vars to the arguments to the function
       auto It = usedSharedVars.begin(), E = usedSharedVars.end();
       // Unpack args from data struct param and replace usages with them
@@ -1116,11 +1118,17 @@ void FunctionTransformer::replaceDim3Usages() {
     }
 }
 
-bool dependsOnInsts(Instruction *I) {
-  for (Use &U : I->operands()) {
-    Value *V = U.get();
-    if (isa<Instruction>(V))
-      return true;
+bool dependsOnState(Value *V) {
+  auto I = dyn_cast<Instruction>(V);
+  if (isa<CallBase>(V)) {
+    // TODO This should be fine if the called function is pure
+    return true;
+  } else if (isa<PHINode>(V)) {
+    return true;
+  } else if (I) {
+    for (Use &U : I->operands())
+      if (dependsOnState(U.get()))
+        return true;
   }
   return false;
 }
@@ -1193,10 +1201,11 @@ void FunctionTransformer::optimizeUsedVals() {
   for (auto SK : SubkernelIds) {
     for (auto _SK : SubkernelIds) {
       ValueVector UsedValsToRemove;
-      for (auto V : SubkernelUsedVals[SK][_SK]) {
+      auto &UsedVals = SubkernelUsedVals[SK][_SK];
+      for (auto V : UsedVals) {
         auto I = dyn_cast<Instruction>(V);
         // If it purely depends on the arguments and global variables
-        if (!dependsOnInsts(I)) {
+        if (!dependsOnState(I)) {
 #ifdef COST_ANALYSIS
           auto RecalculationCost = instCostFromArgs(I, TTI);
           auto StoreCost = getStoreCost(I, TTI);
@@ -1209,25 +1218,27 @@ void FunctionTransformer::optimizeUsedVals() {
             recalculateArgOnlyInstAfterBarrier(I);
           }
 #endif
-          // Recalculate the usedVal just before each use, the following
-          // optimization passes should (hopefully, TODO check) optimize away
-          // the unneeded ones
+          // Insert the recalculated values at the start of the entry BB of the
+          // subkernel
+          Instruction *InsertBefore = SubkernelBBs[SK][0]->getFirstNonPHI();
+          auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, InsertBefore);
           for (User *U : I->users()) {
             if (auto UserI = dyn_cast<Instruction>(U)) {
-              auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, UserI);
               ValueToValueMapTy VMap;
               VMap[I] = RecalcdUsedVal;
               RemapInstruction(UserI, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+            } else {
+              assert(false && "What else could use a value?");
             }
           }
           UsedValsToRemove.push_back(V);
         }
-        for (auto V : UsedValsToRemove) {
-          auto &Vec = SubkernelUsedVals[SK][_SK];
-          std::remove(Vec.begin(), Vec.end(), V);
-        }
+      }
+      for (auto V : UsedValsToRemove) {
+        UsedVals.erase(std::find(UsedVals.begin(), UsedVals.end(), V));
       }
     }
+    //assert(verifyFunction(*SubkernelFs[SK]));
   }
 }
 
