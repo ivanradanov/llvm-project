@@ -133,7 +133,7 @@ namespace llvm {
 class FunctionTransformer {
 public:
   Module *M;
-	TargetTransformInfo *TTI;
+  TargetTransformInfo *TTI;
 
   Function *F;
   Function *OriginalF;
@@ -205,7 +205,8 @@ public:
   bool isSharedVar(GlobalVariable *G);
   void createDriverFunction();
   void createSelfContainedFunction();
-	void optimizeUsedVals();
+  void optimizeUsedVals();
+  void indexUsedVals();
   void createWrapperFunction();
   void replaceDim3Usages();
   void getDim3StructType();
@@ -213,7 +214,7 @@ public:
   ValueVector convertDim3ToArgs(Value *D, Instruction *After);
   void cleanup();
 
-	FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI);
+  FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI);
 
 };
 
@@ -535,7 +536,7 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
     else if (Argument *A = dyn_cast<Argument>(Val))
       AV.push_back(A);
     else if (GlobalVariable *G = dyn_cast<GlobalVariable>(Val))
-	    GV.push_back(G);
+      GV.push_back(G);
     else
       assert(false && "Used vals must be only instructions, arguments, or globals");
   }
@@ -553,9 +554,9 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
   });
   ValueVector SortedVV;
   for (auto G : GV) {
-	  Value *Val = static_cast<Value *>(G);
-	  Indices[Val] = SortedVV.size();
-	  SortedVV.push_back(G);
+    Value *Val = static_cast<Value *>(G);
+    Indices[Val] = SortedVV.size();
+    SortedVV.push_back(G);
   }
   for (auto Arg : AV) {
     Value *Val = static_cast<Value *>(Arg);
@@ -571,7 +572,7 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
 }
 
 bool FunctionTransformer::isSharedVar(GlobalVariable *G) {
-	return G->hasAttribute(Attribute::CPUCUDAShared);
+  return G->hasAttribute(Attribute::CPUCUDAShared);
 }
 
 class DomAnalysis {
@@ -634,7 +635,6 @@ public:
 // Currently only tracks registers and not values written to memory
 void FunctionTransformer::findSubkernelUsedValsDom() {
   for (auto SK : SubkernelIds) {
-    ValueVector CombinedUsedInsts;
     for (auto _SK : SubkernelIds) {
       DomAnalysis DA(SK, _SK, this);
       ValueSet UsedInsts;
@@ -660,16 +660,7 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
       SubkernelUsedVals[SK][_SK] = ValueVector(UsedInsts.begin(), UsedInsts.end());
       SubkernelUsedSharedVars[SK][_SK] = GlobalVarVector(UsedSharedVars.begin(), UsedSharedVars.end());
 
-      for (auto I : UsedInsts)
-        if (!in_vector(CombinedUsedInsts, I))
-          CombinedUsedInsts.push_back(I);
-
     }
-
-    map<Value *, int> IndexInCombinedDataType;
-    sortValueVector(SK, CombinedUsedInsts, IndexInCombinedDataType);
-    this->CombinedUsedVals[SK] = CombinedUsedInsts;
-    this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
 
     // TODO make the sortValueVector function templated so we dont need to
     // convert vectors around
@@ -687,19 +678,6 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
       this->IndexInCombinedSharedVarsDataType[SK][G] = Index;
     }
   }
-  vector<StructType *> CombinedDataTypes;
-  for (auto SK : SubkernelIds) {
-    ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
-    TypeVector Types;
-    for (auto Val : CombinedUsedVals) {
-      Types.push_back(Val->getType());
-    }
-    CombinedDataTypes.push_back(StructType::get(M->getContext(), Types));
-  }
-  for (auto SK : SubkernelIds) {
-    assert(CombinedDataTypes[0] == CombinedDataTypes[SK]);
-  }
-  CombinedDataType = CombinedDataTypes[0];
 }
 
 set<SubkernelIdType> FunctionTransformer::getSubkernelSuccessors(SubkernelIdType SK) {
@@ -943,8 +921,8 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
         G->replaceUsesWithIf(Gep, [&](Use &U) {
-	        Instruction *I = dyn_cast<Instruction>(U.getUser());
-	        return I->getParent()->getParent() == nf;
+          Instruction *I = dyn_cast<Instruction>(U.getUser());
+          return I->getParent()->getParent() == nf;
         });
         Gep->takeName(G);
         // TODO clean up the shared variables when we are done with all subkernels
@@ -1042,10 +1020,10 @@ void FunctionTransformer::findSharedVars() {
   for (auto SK : SubkernelIds) {
     for (auto &BB : *SubkernelFs[SK]) {
       for (auto &I : BB) {
-	      for (Use &U : I.operands()) {
-		      Value *V = U.get();
-		      GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
-		      if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars[SK], UseG))
+        for (Use &U : I.operands()) {
+          Value *V = U.get();
+          GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
+          if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars[SK], UseG))
             CombinedSharedVars[SK].push_back(UseG);
         }
       }
@@ -1054,8 +1032,8 @@ void FunctionTransformer::findSharedVars() {
 
   TypeVector Types;
   for (auto G : CombinedSharedVars[0]) {
-	  assert(isa<PointerType>(G->getType()));
-	  Types.push_back(dyn_cast<PointerType>(G->getType())->getPointerElementType());
+    assert(isa<PointerType>(G->getType()));
+    Types.push_back(dyn_cast<PointerType>(G->getType())->getPointerElementType());
   }
   SharedVarsDataType = StructType::get(M->getContext(), Types);
 }
@@ -1139,30 +1117,30 @@ void FunctionTransformer::replaceDim3Usages() {
 }
 
 bool dependsOnInsts(Instruction *I) {
-	for (Use &U : I->operands()) {
-		Value *V = U.get();
-		if (isa<Instruction>(V))
-			return true;
-	}
-	return false;
+  for (Use &U : I->operands()) {
+    Value *V = U.get();
+    if (isa<Instruction>(V))
+      return true;
+  }
+  return false;
 }
 
 InstructionCost instCostFromArgs(Instruction *I, TargetTransformInfo *TTI) {
-	InstructionCost Cost = TTI->getInstructionCost(I, TARGET_COST_KIND);
+  InstructionCost Cost = TTI->getInstructionCost(I, TARGET_COST_KIND);
   for (Use &U : I->operands()) {
     Value *V = U.get();
     if (auto UseI = dyn_cast<Instruction>(V))
-	    Cost += instCostFromArgs(UseI, TTI);
+      Cost += instCostFromArgs(UseI, TTI);
   }
   return Cost;
 }
 
 InstructionCost getStoreCost(Instruction *I, TargetTransformInfo *TTI) {
-	auto Store = new StoreInst(
-			I, ConstantPointerNull::get(PointerType::get(I->getType(), I->getParent()->getParent()->getAddressSpace())), I);
+  auto Store = new StoreInst(
+      I, ConstantPointerNull::get(PointerType::get(I->getType(), I->getParent()->getParent()->getAddressSpace())), I);
   InstructionCost IC = TTI->getInstructionCost(Store, TARGET_COST_KIND);
-	Store->eraseFromParent();
-	return IC;
+  Store->eraseFromParent();
+  return IC;
 }
 
 InstructionCost getLoadCost(Instruction *I, TargetTransformInfo *TTI) {
@@ -1176,23 +1154,110 @@ InstructionCost getLoadCost(Instruction *I, TargetTransformInfo *TTI) {
   return IC;
 }
 
-void FunctionTransformer::optimizeUsedVals() {
-  for (auto SK : SubkernelIds) {
-	  for (auto V : SubkernelUsedVals[SK][SK]) {
-		  auto I = dyn_cast<Instruction>(V);
-		  // If it purely depends on the arguments and global variables
-      if (!dependsOnInsts(I)) {
-	      auto RecalculationCost = instCostFromArgs(I, TTI);
-	      auto StoreCost = getStoreCost(I, TTI);
-	      auto LoadCost = getLoadCost(I, TTI);
-	      int ExpectedLoadCount = 1;
-	      int ExpectedStoreCount = 1;
+// Returns the recalculated instruction
+Instruction *recalculateArgOnlyInstAfterBarrier(Instruction *I, Instruction *InsertBefore) {
+  queue<Instruction *> ToClone;
+  InstVector Cloned;
+  ValueToValueMapTy VMap;
+  ToClone.push(I);
+  while (!ToClone.empty()) {
+    auto I = ToClone.front();
+    ToClone.pop();
 
-	      if (ExpectedStoreCount * StoreCost + ExpectedLoadCount * LoadCost)
-		      ;
+    auto *NI = I->clone();
+    NI->insertBefore(InsertBefore);
+    InsertBefore = NI;
+    NI->setName(I->getName());
+    VMap[I] = NI;
+    Cloned.push_back(NI);
+
+    for (Use &U : I->operands()) {
+      Value *V = U.get();
+      auto UseI = dyn_cast<Instruction>(V);
+      if (UseI) {
+        ToClone.push(UseI);
       }
     }
   }
+
+  for (auto I : Cloned) {
+    RemapInstruction(I, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+  }
+
+  return Cloned[0];
+}
+
+void FunctionTransformer::optimizeUsedVals() {
+  //map<SubkernelIdType, map<int, InstructionCost>> RecalcBenefit;
+
+  for (auto SK : SubkernelIds) {
+    ValueVector UsedValsToRemove;
+    for (auto V : SubkernelUsedVals[SK][SK]) {
+      auto I = dyn_cast<Instruction>(V);
+      // If it purely depends on the arguments and global variables
+      if (!dependsOnInsts(I)) {
+#ifdef COST_ANALYSIS
+        auto RecalculationCost = instCostFromArgs(I, TTI);
+        auto StoreCost = getStoreCost(I, TTI);
+        auto LoadCost = getLoadCost(I, TTI);
+        int ExpectedLoadCount = 1;
+        int ExpectedStoreCount = 1;
+
+        // TODO think about this more
+        if (ExpectedStoreCount * StoreCost + ExpectedLoadCount * LoadCost >= ExpectedLoadCount * RecalculationCost) {
+          recalculateArgOnlyInstAfterBarrier(I);
+        }
+#endif
+        // Recalculate the usedVal just before each use, the following
+        // optimization passes should (hopefully, TODO check) optimize away the unneeded
+        // ones
+        for (Use &U : I->operands()) {
+          Value *V = U.get();
+          if (auto UseI = dyn_cast<Instruction>(V)) {
+            auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, UseI);
+            ValueToValueMapTy VMap;
+            VMap[V] = RecalcdUsedVal;
+            RemapInstruction(UseI, VMap);
+          }
+        }
+        UsedValsToRemove.push_back(V);
+      }
+      for (auto V : UsedValsToRemove) {
+        auto &Vec = SubkernelUsedVals[SK][SK];
+        Vec.erase(std::find(Vec.begin(), Vec.end(), V));
+      }
+    }
+  }
+}
+
+void FunctionTransformer::indexUsedVals() {
+  for (auto SK : SubkernelIds) {
+
+    ValueVector CombinedUsedInsts;
+    for (auto _SK : SubkernelIds)
+      for (auto I : SubkernelUsedVals[SK][_SK])
+        if (!in_vector(CombinedUsedInsts, I))
+          CombinedUsedInsts.push_back(I);
+
+    map<Value *, int> IndexInCombinedDataType;
+    sortValueVector(SK, CombinedUsedInsts, IndexInCombinedDataType);
+    this->CombinedUsedVals[SK] = CombinedUsedInsts;
+    this->IndexInCombinedDataType[SK] = IndexInCombinedDataType;
+  }
+
+  vector<StructType *> CombinedDataTypes;
+  for (auto SK : SubkernelIds) {
+    ValueVector CombinedUsedVals = this->CombinedUsedVals[SK];
+    TypeVector Types;
+    for (auto Val : CombinedUsedVals) {
+      Types.push_back(Val->getType());
+    }
+    CombinedDataTypes.push_back(StructType::get(M->getContext(), Types));
+  }
+  for (auto SK : SubkernelIds) {
+    assert(CombinedDataTypes[0] == CombinedDataTypes[SK]);
+  }
+  CombinedDataType = CombinedDataTypes[0];
 }
 
 void FunctionTransformer::createSubkernels() {
@@ -1203,7 +1268,8 @@ void FunctionTransformer::createSubkernels() {
   assignBBIds();
   findSharedVars();
   findSubkernelUsedValsDom();
-  optimizeUsedVals();
+  //optimizeUsedVals();
+  indexUsedVals();
   SubkernelReturnType = getSubkernelsReturnType();
   for (auto SK : SubkernelIds) {
     transformSubkernels(SK);
@@ -1720,7 +1786,7 @@ void FunctionTransformer::cleanup() {
 
   // Clean up the global shared variables
   for (GlobalVariable *G : CombinedSharedVars[0])
-	  G->eraseFromParent();
+    G->eraseFromParent();
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI) {
@@ -1902,7 +1968,9 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
   this->M = &M;
+#ifdef COST_ANALYSIS
   TTI = &AM.getResult<TargetIRAnalysis>(M);
+#endif
 
   vector<Function *> OriginalFs;
 

@@ -1508,6 +1508,9 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, LTOPreLink));
 
+#ifdef COST_ANALYSIS
+  MPM.addPass(RequireAnalysisPass<TargetIRAnalysis, Module>());
+#endif
   MPM.addPass(CPUCudaPass());
 
   MPM.addPass(buildModuleOptimizationPipeline(Level, LTOPreLink));
