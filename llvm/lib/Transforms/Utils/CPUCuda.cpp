@@ -1394,15 +1394,13 @@ void FunctionTransformer::createDriverFunction() {
   ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
   ConstantInt *One = ConstantInt::get(GepIndexType, 1);
   ConstantInt *mOne = ConstantInt::get(GepIndexType, -1);
+  DataLayout *DL = new DataLayout(M);
 
   BasicBlock *EntryBB = BasicBlock::Create(DriverF->getContext(), "entry", DriverF);
 
-  // TODO do we need to make this heap-allocated as well
-  AllocaInst *StaticSharedData = new AllocaInst(SharedVarsDataType, DriverF->getAddressSpace(), One, "static_shared_data", EntryBB);
-  // TODO Handle dynamic shared data
-  UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
+  AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
-  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, StaticSharedData);
+  ValueVector Dim3Args = convertDim3ToArgs(BlockDimArg, SubkernelRetPtr);
   CallInst *BlockDimx = CallInst::Create(
       Dim3Fs.Getterx->getFunctionType(), Dim3Fs.Getterx, Dim3Args,
       "blockDim_x", EntryBB);
@@ -1416,6 +1414,15 @@ void FunctionTransformer::createDriverFunction() {
       "blockDim_z", EntryBB);
   Dim3Calls.push_back(BlockDimz);
 
+  Instruction *StaticSharedData = CallInst::CreateMalloc(
+		  static_cast<Instruction *>(SubkernelRetPtr),
+		  IntegerType::getInt32Ty(M->getContext()),
+		  SharedVarsDataType,
+		  ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), DL->getTypeAllocSize(SharedVarsDataType)),
+		  nullptr, nullptr, "static_shared_data");
+  // TODO Handle dynamic shared data
+  UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
+
   BinaryOperator *BlockSize = BinaryOperator::Create(
       Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
   BlockSize = BinaryOperator::Create(
@@ -1424,7 +1431,6 @@ void FunctionTransformer::createDriverFunction() {
   Instruction *PreservedData;
   if (Options.MallocPreservedDataArray) {
     Value *MallocSize;
-    DataLayout *DL = new DataLayout(M);
     ConstantInt *StructSize = ConstantInt::get(GepIndexType, DL->getTypeAllocSize(CombinedDataType));
     if (!Options.DynamicPreservedDataArray) {
       ConstantInt *MaxCudaThreads = ConstantInt::get(GepIndexType, MAX_CUDA_THREADS);
@@ -1450,8 +1456,6 @@ void FunctionTransformer::createDriverFunction() {
     PreservedData = new AllocaInst(CombinedDataType, DriverF->getAddressSpace(),
                                    Size, "preserved_data", EntryBB);
   }
-
-  AllocaInst *SubkernelRetPtr = new AllocaInst(SubkernelReturnType, DriverF->getAddressSpace(), One, "ret", EntryBB);
 
   GetElementPtrInst *SubkernelRetFromPtr = GetElementPtrInst::Create(
       SubkernelReturnType, SubkernelRetPtr, {Zero, Zero}, "", EntryBB);
