@@ -626,6 +626,13 @@ public:
     return DomTree->dominates(VMap[ValD], dyn_cast<Instruction>(&*VMap[User]));
   }
 
+  bool dominates(Instruction &_I, unsigned i) {
+    Instruction *I = dyn_cast<Instruction>(&*VMap[&_I]);
+    Instruction *Op = cast<Instruction>(I->getOperand(i));
+    const Use &U = I->getOperandUse(i);
+    return DomTree->dominates(Op, U);
+  }
+
   ~DomAnalysis() {
     F->eraseFromParent();
   }
@@ -642,11 +649,10 @@ void FunctionTransformer::findSubkernelUsedValsDom() {
         BasicBlock *ConvertedBB = convertBasicBlock(&BB, SubkernelFs[SK], SubkernelFs[_SK]);
         if (in_vector(SubkernelBBs[_SK], ConvertedBB)) {
           for (auto &I : BB) {
-            for (Use &U : I.operands()) {
-              Value *V = U.get();
-              Instruction *UseI = dyn_cast<Instruction>(V);
-              if (UseI && !DA.dominates(UseI, &I)) {
-                UsedInsts.insert(V);
+            for (unsigned i = 0, e = I.getNumOperands(); i != e; ++i) {
+              auto *Op = I.getOperand(i);
+              if (isa<Instruction>(Op) && !DA.dominates(I, i)) {
+                UsedInsts.insert(Op);
               }
             }
           }
