@@ -228,17 +228,17 @@ public:
 
 // As of now it works for amd64 on linux
 
-// TODO I think we need to inline all usages after we have used it and delete it
-// because otherwise we will get an error about multiple definitions of the same
-// function when linking Alternatively, we can can change the name so that we
-// make sure it will be unique accross all modules of the program
-void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
+void maybeAssignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
   Assign = nullptr;
   for (auto &F : *M)
     if (F.getName() == String) {
       Assign = &F;
       break;
     }
+}
+
+void assignFunctionWithNameTo(Module *M, Function *&Assign, std::string String) {
+  maybeAssignFunctionWithNameTo(M, Assign, String);
   assert(Assign);
 }
 
@@ -263,9 +263,7 @@ bool instrIsBarrier(Instruction *I) {
 void FunctionTransformer::splitBlocksAroundBarriers(Function &F) {
   while ([&]() -> bool {
     for (auto &bb : F) {
-      //for (auto &instruction : bb) {
-      for (auto _begin = ++bb.begin(); _begin != bb.end(); ++_begin) {
-        auto &instruction = *_begin;
+      for (auto &instruction : bb) {
         if (instrIsBarrier(&instruction)) {
           auto newbb = SplitBlock(&bb, &instruction);
           BlocksAfterBarriers.insert(newbb);
@@ -1836,8 +1834,9 @@ void CPUCudaPass::cleanup(Module *M) {
                     "__cpucuda_dim3_to_arg",
                     "__cpucuda_declared_function_user"}) {
     Function *ToErase;
-    assignFunctionWithNameTo(M, ToErase, Name);
-    ToErase->eraseFromParent();
+    maybeAssignFunctionWithNameTo(M, ToErase, Name);
+    if (ToErase)
+      ToErase->eraseFromParent();
   }
 }
 
