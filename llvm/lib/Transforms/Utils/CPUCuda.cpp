@@ -637,6 +637,12 @@ public:
 };
 
 // Currently only tracks registers and not values written to memory
+
+// TODO I think we would have to transform Alloca's and their lifetime tags into
+// malloc and frees or our custom implementations of them.
+
+// I have a sneaking suspicion this implementation calling dominates() for every
+// instruction in the function SubkernelNum^2 times is terribly, terribly slow
 void FunctionTransformer::findSubkernelUsedValsDom() {
   for (auto SK : SubkernelIds) {
     for (auto _SK : SubkernelIds) {
