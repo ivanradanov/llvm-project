@@ -5189,6 +5189,17 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
                            llvm::Attribute::AlwaysInline);
   }
 
+  // CPUCUDA When we call a __device__ function we have to inline it if it
+  // contains any thread synchronisation. This is because we have to have all
+  // synchronisation calls in the __global__ function for it to be transformed
+  // correctly. For now inline all __device__ functions. TODO maybe we can make
+  // it smarter
+  if (TargetDecl && TargetDecl->hasAttr<CUDADeviceAttr>()) {
+    Attrs =
+      Attrs.addAttribute(getLLVMContext(), llvm::AttributeList::FunctionIndex,
+                         llvm::Attribute::AlwaysInline);
+  }
+
   // Disable inlining inside SEH __try blocks.
   if (isSEHTryScope()) {
     Attrs =
