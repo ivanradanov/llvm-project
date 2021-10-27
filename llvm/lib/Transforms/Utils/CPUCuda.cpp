@@ -202,7 +202,6 @@ public:
   int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
   void sortValueVector(SubkernelIdType SK, ValueVector &VV, map<Value *, int> &Indices);
   void removeReferencesInPhi(const BBVector &BBsToRemove);
-  bool isSharedVar(GlobalVariable *G);
   void createDriverFunction();
   void createSelfContainedFunction();
   void optimizeUsedVals();
@@ -569,7 +568,7 @@ void FunctionTransformer::sortValueVector(SubkernelIdType SK, ValueVector &VV, m
   VV = SortedVV;
 }
 
-bool FunctionTransformer::isSharedVar(GlobalVariable *G) {
+bool isSharedVar(GlobalVariable *G) {
   return G->hasAttribute(Attribute::CPUCUDAShared);
 }
 
@@ -879,6 +878,7 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             getCombinedDataType(), nf->getArg(1), {Zero, Index}, "", EntryBB);
         LoadInst *UnpackedVal = new LoadInst(Val->getType(), Gep, "", EntryBB);
+
         // Replace only if the val does not already dominate the use - sometimes
         // a value dominates only part of the uses in the subkernel - it happens
         // for example when a subkernel starts execution after a barrier and a
@@ -892,7 +892,6 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
     }
 
     {
-      // TODO remove usedsharedvars for individual SKs
       auto usedSharedVars = CombinedSharedVars;
       // Transfer usages of the used shared vars to the arguments to the function
       auto It = usedSharedVars.begin(), E = usedSharedVars.end();
@@ -904,8 +903,12 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
         // The third argument of the function is the structure of shared variables
         GetElementPtrInst *Gep = GetElementPtrInst::Create(
             SharedVarsDataType, nf->getArg(2), {Zero, Index}, "", EntryBB);
+
+        // Perhaps we could use RemapFunction() here to only remap usages within
+        // the function
         G->replaceUsesWithIf(Gep, [&](Use &U) {
           Instruction *I = dyn_cast<Instruction>(U.getUser());
+          assert(I && "There should only be Instruction users by now");
           return I->getParent()->getParent() == nf;
         });
         Gep->takeName(G);
@@ -1967,12 +1970,146 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
   }
 }
 
+namespace {
+
+typedef map<Value *, ValueSet> EdgesTy;
+
+void findSharedVarDeps(Value *Val, ValueSet &Nodes, EdgesTy &Edges) {
+  for (User *U : Val->users()) {
+    if (isa<Instruction>(U)) {
+      Edges[U].insert(Val);
+      Nodes.insert(U);
+      Nodes.insert(Val);
+    } else if (isa<Constant>(U)) {
+      Edges[U].insert(Val);
+      Nodes.insert(U);
+      Nodes.insert(Val);
+      findSharedVarDeps(U, Nodes, Edges);
+    }
+  }
+}
+
+Instruction *_constsToInsts(Value *_V,
+                            ValueSet &Nodes,
+                            EdgesTy &Edges,
+                            map<Constant*, Instruction *> &Converted,
+                            Instruction *InsertBefore) {
+
+  auto I = dyn_cast<Instruction>(_V);
+  auto C = dyn_cast<Constant>(_V);
+
+  Instruction *NI;
+
+  if (C) {
+    auto ConvertedCIt = Converted.find(C);
+    if (ConvertedCIt != Converted.end())
+      return ConvertedCIt->second;
+
+    if (auto CE = dyn_cast<ConstantExpr>(C)) {
+      auto Opcode = CE->getOpcode();
+
+      switch (Opcode) {
+      case Instruction::FPExt:
+      case Instruction::FPToSI:
+      case Instruction::FPToUI:
+      case Instruction::FPTrunc:
+      case Instruction::IntToPtr:
+      case Instruction::PtrToInt:
+      case Instruction::SExt:
+      case Instruction::SIToFP:
+      case Instruction::Trunc:
+      case Instruction::UIToFP:
+      case Instruction::ZExt:
+      case Instruction::BitCast: {
+        NI = CastInst::Create((CastInst::CastOps)Opcode, CE->getOperand(0), CE->getType(), CE->getName(), InsertBefore);
+        break;
+      }
+      default: {
+        assert(false && "TODO ConstantExpr case not handled yet");
+        break;
+      }
+      }
+    } else if (auto CA = dyn_cast<ConstantAggregate>(C)) {
+      assert(false && "TODO ConstantAggregate not handled yet");
+    } else {
+      assert(false && "????");
+    }
+
+    Converted[C] = NI;
+    InsertBefore = NI;
+
+  } else if (I) {
+    NI = I;
+  } else {
+    assert(false && "???");
+  }
+
+  ValueToValueMapTy VMap;
+  for (auto V : Edges[_V]) {
+    // GlobalValues and ConstantData do not need further processing
+    if (isa<GlobalValue>(V))
+      continue;
+    if (isa<ConstantData>(V))
+      continue;
+    assert(isa<Constant>(V) && "?????");
+    // Convert the used constant to an instruction
+    auto DepI = _constsToInsts(V, Nodes, Edges, Converted, InsertBefore);
+    VMap[V] = DepI;
+  }
+  // Remap the used constants to the converted instructions
+  RemapInstruction(NI, VMap, RF_NoModuleLevelChanges | RF_IgnoreMissingLocals);
+
+  return NI;
+}
+
+void constsToInsts(ValueSet &Nodes, EdgesTy &Edges) {
+  Function *F = nullptr;
+  map<Constant *, Instruction *> Converted;
+  for (auto Val : Nodes) {
+    if (auto I = dyn_cast<Instruction>(Val)) {
+      if (F) {
+        // TODO this probably can happen with dynamic shared variables
+        assert(I->getParent()->getParent() && "Usage of a shared variable in multiple functions?");
+      } else {
+        F = I->getParent()->getParent();
+      }
+      auto FirstI = F->getEntryBlock().getFirstNonPHI();
+      _constsToInsts(I, Nodes, Edges, Converted, FirstI);
+    }
+  }
+}
+
+// Replaces constants which depend on shared variables with instructions
+void breakConstExprSharedVarUsages(Module *M) {
+  for (auto &G : M->globals()) {
+    if (isSharedVar(&G)) {
+      ValueSet Nodes;
+      EdgesTy Edges;
+      findSharedVarDeps(cast<Value>(&G), Nodes, Edges);
+      constsToInsts(Nodes, Edges);
+
+      // Now all constants should be dead, but I think the order in which we
+      // delete them matters if some are nested - TODO FIXME
+      for (auto Val : Nodes) {
+        auto C = dyn_cast<Constant>(Val);
+        if (C && !isa<GlobalValue>(C)) {
+          C->destroyConstant();
+        }
+      }
+    }
+  }
+}
+
+} // namespace
+
 PreservedAnalyses CPUCudaPass::run(Module &M,
                                    AnalysisManager<Module> &AM) {
   this->M = &M;
 #ifdef COST_ANALYSIS
   TTI = &AM.getResult<TargetIRAnalysis>(M);
 #endif
+
+  breakConstExprSharedVarUsages(&M);
 
   vector<Function *> OriginalFs;
 
