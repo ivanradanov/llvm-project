@@ -430,33 +430,37 @@ struct TransformTerminator : public InstVisitor<TransformTerminator> {
     }
   }
 
-  void visitSwitchInst(SwitchInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  // Below terminators do not need to be handled - only unconditinal branches
+  // terminate ends of kernels before barriers, and only returns terminate the
+  // final subkernel of a kernel
 
-  void visitIndirectBrInst(IndirectBrInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitSwitchInst(SwitchInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
-  void visitResumeInst(ResumeInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitIndirectBrInst(IndirectBrInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
-  void visitUnreachableInst(UnreachableInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitResumeInst(ResumeInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
-  void visitCleanupReturnInst(CleanupReturnInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitUnreachableInst(UnreachableInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
-  void visitCatchReturnInst(CatchReturnInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitCleanupReturnInst(CleanupReturnInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
-  void visitCatchSwitchInst(CatchSwitchInst &I) {
-    assert(false && "Not yet implemented");
-  }
+  //void visitCatchReturnInst(CatchReturnInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
+
+  //void visitCatchSwitchInst(CatchSwitchInst &I) {
+  //  assert(false && "Not yet implemented");
+  //}
 
 };
 
