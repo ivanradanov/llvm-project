@@ -2901,6 +2901,10 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       // size and host-side address in order to provide access to
       // their device-side incarnations.
 
+
+      // CPUCUDA We need to emit device functions too...
+      if (false)
+
       // So device-only functions are the only things we skip.
       if (isa<FunctionDecl>(Global) && !Global->hasAttr<CUDAHostAttr>() &&
           Global->hasAttr<CUDADeviceAttr>())
