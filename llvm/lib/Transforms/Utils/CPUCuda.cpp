@@ -1033,8 +1033,8 @@ void FunctionTransformer::findSharedVars() {
 
   int Index = 0;
   for (auto G : CombinedSharedVars) {
-	  IndexInCombinedSharedVarsDataType[G] = Index;
-	  Index++;
+    IndexInCombinedSharedVarsDataType[G] = Index;
+    Index++;
   }
 }
 
@@ -1432,11 +1432,11 @@ void FunctionTransformer::createDriverFunction() {
   Dim3Calls.push_back(BlockDimz);
 
   Instruction *StaticSharedData = CallInst::CreateMalloc(
-		  static_cast<Instruction *>(SubkernelRetPtr),
-		  IntegerType::getInt32Ty(M->getContext()),
-		  SharedVarsDataType,
-		  ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), DL->getTypeAllocSize(SharedVarsDataType)),
-		  nullptr, nullptr, "static_shared_data");
+      static_cast<Instruction *>(SubkernelRetPtr),
+      IntegerType::getInt32Ty(M->getContext()),
+      SharedVarsDataType,
+      ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), DL->getTypeAllocSize(SharedVarsDataType)),
+      nullptr, nullptr, "static_shared_data");
   // TODO Handle dynamic shared data
   UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
 
@@ -1794,7 +1794,27 @@ void FunctionTransformer::getDim3Fs() {
   assignFunctionWithNameTo(M, Dim3Fs.Dim3ToArg, "__cpucuda_dim3_to_arg");
 }
 
+void replaceAllFunctionUsesWith(Function *F, Function *RF) {
+  vector<User *> FUsers(F->users().begin(), F->users().end());
+  for (User *U : FUsers) {
+    if (auto BCI = dyn_cast<BitCastInst>(U)) {
+      auto NBCI = new BitCastInst(RF, BCI->getType(), "", BCI);
+      NBCI->takeName(BCI);
+      BCI->replaceAllUsesWith(NBCI);
+      BCI->eraseFromParent();
+    } else {
+      assert(false && "Unhandled function usage case");
+    }
+  }
+}
+
 void FunctionTransformer::cleanup() {
+  if (Options.UseSelfContainedKernel)
+    //OriginalF->replaceAllUsesWith(SelfContainedF);
+    replaceAllFunctionUsesWith(OriginalF, SelfContainedF);
+  else
+    //OriginalF->replaceAllUsesWith(WrapperF);
+    replaceAllFunctionUsesWith(OriginalF, WrapperF);
   OriginalF->eraseFromParent();
   F->eraseFromParent();
 
@@ -1975,7 +1995,9 @@ void CPUCudaPass::transformCallSites(FunctionTransformer *FT) {
       }
       KernelCall->eraseFromParent();
     } else {
-      assert(false && "Unsupported case");
+      // As far as I know, there should be no other instruction type calling the
+      // kernel itself, some might use it as a parameter, for example a call to
+      // cudaFuncSetCacheConfig(kernel)
     }
   }
 }
@@ -2077,35 +2099,44 @@ void constsToInsts(ValueSet &Nodes, EdgesTy &Edges) {
   map<Constant *, Instruction *> Converted;
   for (auto Val : Nodes) {
     if (auto I = dyn_cast<Instruction>(Val)) {
-      if (F) {
-        // TODO this probably can happen with dynamic shared variables
-        assert(I->getParent()->getParent() && "Usage of a shared variable in multiple functions?");
-      } else {
-        F = I->getParent()->getParent();
-      }
+      F = I->getParent()->getParent();
       auto FirstI = F->getEntryBlock().getFirstNonPHI();
       _constsToInsts(I, Nodes, Edges, Converted, FirstI);
     }
   }
 }
 
+void breakConstExprUsages(Constant *C) {
+  ValueSet Nodes;
+  EdgesTy Edges;
+  findSharedVarDeps(cast<Value>(C), Nodes, Edges);
+  constsToInsts(Nodes, Edges);
+
+  // Now all constants should be dead, but I think the order in which we delete
+  // them matters if some are nested - this will crash when a nested used
+  // constant gets deleted before its parent - TODO FIXME
+  for (auto Val : Nodes) {
+    auto C = dyn_cast<Constant>(Val);
+    if (C && !isa<GlobalValue>(C)) {
+      C->destroyConstant();
+    }
+  }
+}
+
+bool isGlobalFunction(Function *F) {
+  return F->hasFnAttribute(Attribute::CPUCUDAGlobal);
+}
+
 // Replaces constants which depend on shared variables with instructions
-void breakConstExprSharedVarUsages(Module *M) {
+void breakConstExprGlobalUsages(Module *M) {
   for (auto &G : M->globals()) {
     if (isSharedVar(&G)) {
-      ValueSet Nodes;
-      EdgesTy Edges;
-      findSharedVarDeps(cast<Value>(&G), Nodes, Edges);
-      constsToInsts(Nodes, Edges);
-
-      // Now all constants should be dead, but I think the order in which we
-      // delete them matters if some are nested - TODO FIXME
-      for (auto Val : Nodes) {
-        auto C = dyn_cast<Constant>(Val);
-        if (C && !isa<GlobalValue>(C)) {
-          C->destroyConstant();
-        }
-      }
+      breakConstExprUsages(&G);
+    }
+  }
+  for (auto &F : *M) {
+    if (isGlobalFunction(&F)) {
+      breakConstExprUsages(&F);
     }
   }
 }
@@ -2119,7 +2150,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
   TTI = &AM.getResult<TargetIRAnalysis>(M);
 #endif
 
-  breakConstExprSharedVarUsages(&M);
+  breakConstExprGlobalUsages(&M);
 
   vector<Function *> OriginalFs;
 
@@ -2133,7 +2164,7 @@ PreservedAnalyses CPUCudaPass::run(Module &M,
 
     Function &F = *_F;
 
-    if (!F.hasFnAttribute(Attribute::CPUCUDAGlobal))
+    if (!isGlobalFunction(&F))
       continue;
 
     LLVM_DEBUG(errs() << "processing function " << F.getName() << "\n");
