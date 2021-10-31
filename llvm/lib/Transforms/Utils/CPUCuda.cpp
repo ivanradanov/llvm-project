@@ -177,6 +177,7 @@ public:
   IntegerType *GepIndexType;
   IntegerType *I32Type;
   IntegerType *Dim3FieldType;
+  IntegerType *SizeTType;
   Type *Dim3Type;
   Type *Dim3PtrType;
 
@@ -1383,6 +1384,9 @@ void FunctionTransformer::createDriverFunction() {
     ArgTypes.push_back(Dim3Type);
   }
 
+  // shared mem
+  ArgTypes.push_back(SizeTType);
+
   auto NewFT = FunctionType::get(FT->getReturnType(), ArgTypes, false);
   auto NewF = Function::Create(NewFT, F->getLinkage(), F->getAddressSpace(),
                                F->getName(), F->getParent());
@@ -1406,6 +1410,7 @@ void FunctionTransformer::createDriverFunction() {
   DriverF = NewF;
 
   int Dim3ArgStartIndex = FT->getNumParams();
+  int SharedMemSizeParamIndex = Dim3ArgStartIndex + 3;
   Argument *BlockDimArg = DriverF->getArg(Dim3ArgStartIndex + 2);
 
   ConstantInt *Zero = ConstantInt::get(GepIndexType, 0);
@@ -1438,7 +1443,12 @@ void FunctionTransformer::createDriverFunction() {
       ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), DL->getTypeAllocSize(SharedVarsDataType)),
       nullptr, nullptr, "static_shared_data");
   // TODO Handle dynamic shared data
-  UndefValue *DynSharedData = UndefValue::get(PointerType::get(IntegerType::getInt8Ty(M->getContext()), DriverF->getAddressSpace()));
+  Instruction *DynSharedData = CallInst::CreateMalloc(
+      static_cast<Instruction *>(SubkernelRetPtr),
+      SizeTType,
+      IntegerType::getInt8Ty(M->getContext()),
+      DriverF->getArg(SharedMemSizeParamIndex),
+      nullptr, nullptr, "static_shared_data");
 
   BinaryOperator *BlockSize = BinaryOperator::Create(
       Instruction::BinaryOps::Mul, BlockDimx, BlockDimy, "blockDimMul", EntryBB);
@@ -1504,8 +1514,10 @@ void FunctionTransformer::createDriverFunction() {
           CombinedDataType, PreservedData, {PreservedDataIdx}, "threadPreservedData", SubkernelCallBB);
 
       ValueVector Args = {From, ThreadPreservedData, StaticSharedData, DynSharedData};
-      // original args + gridDim, blockIdx, blockDim
-      for (auto &Arg : DriverF->args()) {
+      // original args + gridDim, blockIdx, blockDim (we dont need the last arg
+      // which is shared_mem_size)
+      for (auto _it = DriverF->args().begin(); _it + 1!= DriverF->args().end(); ++_it) {
+        auto &Arg = *_it;
         Args.push_back(&Arg);
       }
       // threadIdx
@@ -1690,6 +1702,9 @@ void FunctionTransformer::createSelfContainedFunction() {
   CallsToInline.push_back(BlockIdx);
   CallArgs.insert(CallArgs.end() - 1, BlockIdx);
 
+  // handle different ABIs...
+  CallArgs.push_back(SelfContainedF->getArg(5));
+
   CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", DriverFCallBB);
 
   Loopx.hookUpBBs(DriverFCallBB, DriverFCallBB);
@@ -1772,6 +1787,9 @@ void FunctionTransformer::createWrapperFunction() {
     CallArgs.push_back(ToDim3);
   */
 
+  // dynamic shared mem arg, will change with ABI
+  CallArgs.push_back(WrapperF->getArg(7));
+
   CallInst::Create(DriverF->getFunctionType(), DriverF, CallArgs, "", EntryBB);
   BranchInst::Create(ExitBB, EntryBB);
 
@@ -1833,6 +1851,9 @@ FunctionTransformer::FunctionTransformer(Module *M, Function *F, TargetTransform
   GepIndexType = IntegerType::getInt32Ty(M->getContext());
   I32Type = IntegerType::getInt32Ty(M->getContext());
   Dim3FieldType = IntegerType::getInt32Ty(M->getContext());
+  // Will change with platform ABI maybe?
+  SizeTType = IntegerType::getInt64Ty(M->getContext());
+
   getDim3Fs();
   getDim3StructType();
 
