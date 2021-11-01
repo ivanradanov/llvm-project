@@ -4004,6 +4004,11 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   }
 
   if (GV->isDeclaration()) {
+
+    // CPUCUDA we need to tag dynamic shared mem to handle later
+    if (D && D->hasAttr<CUDASharedAttr>() && D->hasExternalStorage())
+      GV->addAttribute(llvm::Attribute::CPUCUDAShared);
+
     getTargetCodeGenInfo().setTargetAttributes(D, GV, *this);
     // External HIP managed variables needed to be recorded for transformation
     // in both device and host compilations.

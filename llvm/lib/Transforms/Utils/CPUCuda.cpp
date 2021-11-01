@@ -165,6 +165,8 @@ public:
   GlobalVarVector CombinedSharedVars;
   StructType *SharedVarsDataType;
 
+  GlobalVariable *DynamicSharedVar;
+
   Function *DriverF;
   Function *WrapperF;
   Function *SelfContainedF;
@@ -577,6 +579,14 @@ bool isSharedVar(GlobalVariable *G) {
   return G->hasAttribute(Attribute::CPUCUDAShared);
 }
 
+bool isStaticSharedVar(GlobalVariable *G) {
+  return G->hasAttribute(Attribute::CPUCUDAShared) && !G->isDeclaration();
+}
+
+bool isDynamicSharedVar(GlobalVariable *G) {
+  return G->hasAttribute(Attribute::CPUCUDAShared) && G->isDeclaration();
+}
+
 class DomAnalysis {
 public:
   SubkernelIdType SK;
@@ -928,6 +938,18 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
       }
     }
 
+    // Replace usages of the dynamic shared variable if it exists
+    if (DynamicSharedVar) {
+      auto SharedVarArg = nf->getArg(3);
+      auto SharedVarArgCast = new BitCastInst(
+          SharedVarArg, DynamicSharedVar->getType(), "cast_dyn_shared_var", EntryBB);
+      DynamicSharedVar->replaceUsesWithIf(SharedVarArgCast, [&](Use &U) {
+        Instruction *I = dyn_cast<Instruction>(U.getUser());
+        assert(I && "There should only be Instruction users by now");
+        return I->getParent()->getParent() == nf;
+      });
+    }
+
     // Add return from exiting blocks
     for (auto &bb : nfunc_bbs) {
       Instruction *term = bb->getTerminator();
@@ -1012,15 +1034,27 @@ void FunctionTransformer::transformSubkernels(SubkernelIdType SK) {
 
 }
 
+// In the cases where the global shared variable is used in a constant
+// expression and then that CE is used in an Instruction, this implementation
+// would not find it, however, we should have already converted all shared
+// variable usages to instructions, so this works (hopefully)
 void FunctionTransformer::findSharedVars() {
+  DynamicSharedVar = nullptr;
   auto SK = 0;
   for (auto &BB : *SubkernelFs[SK]) {
     for (auto &I : BB) {
       for (Use &U : I.operands()) {
         Value *V = U.get();
         GlobalVariable *UseG = dyn_cast<GlobalVariable>(V);
-        if (UseG && isSharedVar(UseG) && !in_vector(CombinedSharedVars, UseG))
+        if (UseG && isStaticSharedVar(UseG) && !in_vector(CombinedSharedVars, UseG))
           CombinedSharedVars.push_back(UseG);
+        if (UseG && isDynamicSharedVar(UseG)) {
+          if (!DynamicSharedVar)
+            DynamicSharedVar = UseG;
+          else
+            // There can only be one dynamic shared variable per kernel
+            assert(DynamicSharedVar == UseG);
+        }
       }
     }
   }
@@ -1839,6 +1873,11 @@ void FunctionTransformer::cleanup() {
   // Clean up the global shared variables
   for (GlobalVariable *G : CombinedSharedVars)
     G->eraseFromParent();
+
+  // Dynamic shared var cannot be erased here because multiple template
+  // instantiations of the same function could use the same extern __shared__
+  // variable, we erase them after we are done cleaning up all of the
+  // FunctionTransformer's
 }
 
 FunctionTransformer::FunctionTransformer(Module *M, Function *F, TargetTransformInfo *TTI) {
@@ -1873,9 +1912,23 @@ void CPUCudaPass::cleanup(Module *M) {
     Pair.second->cleanup();
   }
 
+  // After we are done cleaning up individual FunctionTransformers we are now
+  // sure that all usages of extern __shared__ variables are dead, we can delete
+  // them now
+  GlobalVarSet DeletedVars = {nullptr};
+  for (auto &Pair : FunctionTransformers) {
+    auto Var = Pair.second->DynamicSharedVar;
+    if (!in_set(DeletedVars, Var)) {
+      Var->eraseFromParent();
+      DeletedVars.insert(Var);
+    }
+  }
+
   for (auto &Pair : FunctionTransformers) {
     delete Pair.second;
   }
+
+
   FunctionTransformers = std::map<Function *, FunctionTransformer *>();
 
 
@@ -2075,6 +2128,15 @@ Instruction *_constsToInsts(Value *_V,
       case Instruction::ZExt:
       case Instruction::BitCast: {
         NI = CastInst::Create((CastInst::CastOps)Opcode, CE->getOperand(0), CE->getType(), CE->getName(), InsertBefore);
+        break;
+      }
+      case Instruction::GetElementPtr: {
+        ValueVector Idxs;
+        for (unsigned i = 1; i < CE->getNumOperands(); ++i)
+          Idxs.push_back(CE->getOperand(i));
+        NI = GetElementPtrInst::Create(
+            dyn_cast<PointerType>(CE->getOperand(0)->getType())->getElementType(),
+            CE->getOperand(0), Idxs, CE->getName(), InsertBefore);
         break;
       }
       default: {
