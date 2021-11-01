@@ -200,6 +200,7 @@ public:
   void transformSubkernels(SubkernelIdType SK);
   void findSubkernelBBs();
   void findSharedVars();
+  void handleAllocas(Function *F);
   void createSubkernels();
   Type *getCombinedDataType();
   int getValIndexInCombinedDataType(SubkernelIdType SK, Value *Val);
@@ -1305,9 +1306,21 @@ void FunctionTransformer::indexUsedVals() {
   CombinedDataType = CombinedDataTypes[0];
 }
 
+void FunctionTransformer::handleAllocas(Function *F) {
+  for (auto &bb : *F) {
+    for (auto It = bb.begin(); It != bb.end(); ++It) {
+      auto &I = *It;
+
+      if (auto Alloca = dyn_cast<AllocaInst>(&I))
+        assert(false && "ALLOCA FOUND IN KERNEL!");
+    }
+  }
+}
+
 void FunctionTransformer::createSubkernels() {
   replaceDim3Usages();
   splitBlocksAroundBarriers(*F);
+  handleAllocas(F);
   findSubkernelBBs();
   createSubkernelFunctionClones();
   assignBBIds();
