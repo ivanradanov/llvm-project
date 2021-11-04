@@ -951,6 +951,7 @@ void CodeGenFunction::StartFunction(GlobalDecl GD, QualType RetTy,
   if (FD && getLangOpts().CUDA && FD->hasAttr<CUDAGlobalAttr>()) {
 	  Fn->addFnAttr(llvm::Attribute::CPUCUDAGlobal);
 	  Fn->addFnAttr(llvm::Attribute::NoInline);
+	  Fn->setDoesNotThrow();
   }
 
   if (FD && getLangOpts().CPUCUDA && FD->hasAttr<CUDAGlobalAttr>()) {
