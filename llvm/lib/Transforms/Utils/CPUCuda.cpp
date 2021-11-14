@@ -121,7 +121,7 @@ struct {
   bool DynamicPreservedDataArray = false;
   // Manually inline the subkernels in the driver function - the optimisations
   // following this pass should do it anyways if it is deemed profitable
-  bool InlineSubkernels = true;
+  bool InlineSubkernels = false;
   // Actually they always have to be inlined because otherwise we would get
   // undefined references when linking, so not really an option currently
   bool InlineDim3Fs = true;
@@ -187,7 +187,6 @@ public:
   bool blockIsAfterBarrier(BasicBlock *BB);
   bool blockIsAfterBarrier(SubkernelIdType SK, BasicBlock *BB);
   void _findSubkernelBBs(BasicBlock *BB, BBSet &visited);
-  UsedValVars findUsedVals(SubkernelIdType SK, BasicBlock *BB, ValueSet definedVals, BBVector visited);
   void findSubkernelUsedValsDom();
   SubkernelIdType findSubkernelFromBB(BBIdType BB);
   void createSubkernelFunctionClones();
@@ -1053,8 +1052,7 @@ void FunctionTransformer::findSharedVars() {
           if (!DynamicSharedVar)
             DynamicSharedVar = UseG;
           else
-            // There can only be one dynamic shared variable per kernel
-            assert(DynamicSharedVar == UseG);
+            assert(DynamicSharedVar == UseG && "There can only be one dynamic shared variable per kernel");
         }
       }
     }
@@ -1256,7 +1254,8 @@ void FunctionTransformer::optimizeUsedVals() {
           // subkernel
           Instruction *InsertBefore = SubkernelBBs[SK][0]->getFirstNonPHI();
           auto RecalcdUsedVal = recalculateArgOnlyInstAfterBarrier(I, InsertBefore);
-          for (User *U : I->users()) {
+          vector<User *> Users(I->users().begin(), I->users().end());
+          for (User *U : Users) {
             if (auto UserI = dyn_cast<Instruction>(U)) {
               ValueToValueMapTy VMap;
               VMap[I] = RecalcdUsedVal;
