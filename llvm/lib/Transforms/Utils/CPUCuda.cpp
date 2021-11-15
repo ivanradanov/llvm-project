@@ -121,7 +121,7 @@ struct {
   bool DynamicPreservedDataArray = false;
   // Manually inline the subkernels in the driver function - the optimisations
   // following this pass should do it anyways if it is deemed profitable
-  bool InlineSubkernels = false;
+  bool InlineSubkernels = true;
   // Actually they always have to be inlined because otherwise we would get
   // undefined references when linking, so not really an option currently
   bool InlineDim3Fs = true;
@@ -2201,21 +2201,34 @@ void constsToInsts(ValueSet &Nodes, EdgesTy &Edges) {
   }
 }
 
+void deleteBrokenConsts(ValueSet &Nodes, EdgesTy Edges) {
+  ValueVector ToDelete;
+  for (auto Val : Nodes)
+    if (isa<Constant>(Val) && !isa<GlobalValue>(Val))
+      ToDelete.push_back(Val);
+
+  while (!ToDelete.empty()) {
+    for (auto It = ToDelete.begin(); It != ToDelete.end(); ) {
+      auto C = dyn_cast<Constant>(*It);
+      assert(C);
+      if (C->hasNUses(0)) {
+        C->destroyConstant();
+        It = ToDelete.erase(It);
+      } else {
+        ++It;
+      }
+    }
+  }
+}
+
 void breakConstExprUsages(Constant *C) {
   ValueSet Nodes;
   EdgesTy Edges;
   findSharedVarDeps(cast<Value>(C), Nodes, Edges);
   constsToInsts(Nodes, Edges);
 
-  // Now all constants should be dead, but I think the order in which we delete
-  // them matters if some are nested - this will crash when a nested used
-  // constant gets deleted before its parent - TODO FIXME
-  for (auto Val : Nodes) {
-    auto C = dyn_cast<Constant>(Val);
-    if (C && !isa<GlobalValue>(C)) {
-      C->destroyConstant();
-    }
-  }
+  // Now all constants should be dead, delete them
+  deleteBrokenConsts(Nodes, Edges);
 }
 
 bool isGlobalFunction(Function *F) {
