@@ -1305,6 +1305,11 @@ void FunctionTransformer::indexUsedVals() {
   CombinedDataType = CombinedDataTypes[0];
 }
 
+// When there is an Alloca in the kernel, in the cases where the alloca variable
+// lives across barriers, it has to be transformed into a malloc which has to be
+// free'd either at the lifetime end of the alloca if it exists or at the return
+// points of the kernel. We could perhaps implement our own malloc for this but
+// for the time being the stdlib malloc should be good enough
 void FunctionTransformer::handleAllocas(Function *F) {
   for (auto &bb : *F) {
     for (auto It = bb.begin(); It != bb.end(); ++It) {
