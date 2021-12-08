@@ -1311,6 +1311,11 @@ void FunctionTransformer::indexUsedVals() {
 // points of the kernel. We could perhaps implement our own malloc for this but
 // for the time being the stdlib malloc should be good enough
 void FunctionTransformer::handleAllocas(Function *F) {
+  // Do an easy check for whether we actually have barriers, if we don't, there
+  // is no need to transform allocas
+  if (BlocksAfterBarriers.size() == 0)
+    return;
+
   for (auto &bb : *F) {
     for (auto It = bb.begin(); It != bb.end(); ++It) {
       auto &I = *It;
