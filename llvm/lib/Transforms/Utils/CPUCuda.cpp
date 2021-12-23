@@ -1332,8 +1332,32 @@ void FunctionTransformer::handleAllocas(Function *F) {
         Malloc->takeName(Alloca);
         Alloca->replaceAllUsesWith(Malloc);
         It = Alloca->eraseFromParent();
-        // TODO we are leaking the malloc - need to find a lifetime.end to free
-        // it at or if it doesnt exist, when exiting the function
+        vector<User *> Users(Malloc->users().begin(), Malloc->users().end());
+        IntrinsicInst *Start = nullptr, *End = nullptr;
+        // Insert the free at the lifetime end
+        for (User *U : Users) {
+          if (auto *Intr = dyn_cast<IntrinsicInst>(U)) {
+            auto IntrID = Intr->getIntrinsicID();
+            if (IntrID == Intrinsic::lifetime_start) {
+              assert(!Start && "There are multiple alloca lifetime starts, how does this work?");
+              Start = Intr;
+              Start->eraseFromParent();
+            } else if (IntrID == Intrinsic::lifetime_end) {
+              assert(!End && "There are multiple alloca lifetime ends, how does this work?");
+              End = Intr;
+              CallInst::CreateFree(Malloc, End);
+              End->eraseFromParent();
+            }
+          }
+        }
+        // No lifetime end exists, insert it at the function exit points
+        if (!End) {
+          for (auto &BB : *F) {
+            Instruction *Term = BB.getTerminator();
+            if (isa<ReturnInst>(Term))
+              CallInst::CreateFree(Malloc, Term);
+          }
+        }
       } else {
         ++It;
       }
