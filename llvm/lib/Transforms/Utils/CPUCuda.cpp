@@ -1316,12 +1316,27 @@ void FunctionTransformer::handleAllocas(Function *F) {
   if (BlocksAfterBarriers.size() == 0)
     return;
 
+  DataLayout *DL = new DataLayout(M);
+
   for (auto &bb : *F) {
-    for (auto It = bb.begin(); It != bb.end(); ++It) {
+    for (auto It = bb.begin(); It != bb.end(); ) {
       auto &I = *It;
 
-      if (auto Alloca = dyn_cast<AllocaInst>(&I))
-        assert(false && "ALLOCA FOUND IN KERNEL!");
+      if (auto Alloca = dyn_cast<AllocaInst>(&I)) {
+        Instruction *Malloc = CallInst::CreateMalloc(
+            static_cast<Instruction *>(Alloca),
+            IntegerType::getInt32Ty(M->getContext()),
+            Alloca->getAllocatedType(),
+            ConstantInt::get(IntegerType::getInt32Ty(M->getContext()), DL->getTypeAllocSize(Alloca->getAllocatedType())),
+            nullptr, nullptr, "");
+        Malloc->takeName(Alloca);
+        Alloca->replaceAllUsesWith(Malloc);
+        It = Alloca->eraseFromParent();
+        // TODO we are leaking the malloc - need to find a lifetime.end to free
+        // it at or if it doesnt exist, when exiting the function
+      } else {
+        ++It;
+      }
     }
   }
 }
