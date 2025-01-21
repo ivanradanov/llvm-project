@@ -66,6 +66,8 @@ public:
   /// is that of the flag: `-forget-scev-loop-unroll`.
   bool ForgetAllSCEVInLoopUnroll;
 
+  bool EnableLICM;
+
   /// Tuning option to cap the number of calls to retrive clobbering accesses in
   /// MemorySSA, in LICM.
   unsigned LicmMssaOptCap;

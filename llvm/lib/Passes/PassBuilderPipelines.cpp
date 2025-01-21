@@ -317,6 +317,7 @@ PipelineTuningOptions::PipelineTuningOptions() {
   SLPVectorization = false;
   LoopUnrolling = true;
   ForgetAllSCEVInLoopUnroll = ForgetSCEVInLoopUnroll;
+  EnableLICM = true;
   LicmMssaOptCap = SetLicmMssaOptCap;
   LicmMssaNoAccForPromotionCap = SetLicmMssaNoAccForPromotionCap;
   CallGraphProfile = true;
@@ -461,6 +462,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
   // will destroy metadata that may not need to be destroyed if run
   // after loop rotation.
   // TODO: Investigate promotion cap for O1.
+  if (PTO.EnableLICM)
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/false));
 
@@ -468,6 +470,7 @@ PassBuilder::buildO1FunctionSimplificationPipeline(OptimizationLevel Level,
     LPM1.addPass(LoopRotatePass(/* Disable header duplication */ true,
                                 isLTOPreLink(Phase)));
   // TODO: Investigate promotion cap for O1.
+  if (PTO.EnableLICM)
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/true));
   if (!PTO.PreserveLoops)
@@ -653,6 +656,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   // will destroy metadata that may not need to be destroyed if run
   // after loop rotation.
   // TODO: Investigate promotion cap for O1.
+  if (PTO.EnableLICM)
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/false));
 
@@ -662,6 +666,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
                                     Level != OptimizationLevel::Oz,
                                 isLTOPreLink(Phase)));
   // TODO: Investigate promotion cap for O1.
+  if (PTO.EnableLICM)
   LPM1.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                         /*AllowSpeculation=*/true));
   if (!PTO.PreserveLoops)
@@ -765,6 +770,7 @@ PassBuilder::buildFunctionSimplificationPipeline(OptimizationLevel Level,
   FPM.addPass(DSEPass());
   FPM.addPass(MoveAutoInitPass());
 
+  if (PTO.EnableLICM)
   FPM.addPass(createFunctionToLoopPassAdaptor(
       LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                /*AllowSpeculation=*/true),
@@ -1342,6 +1348,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
     ExtraPasses.addPass(CorrelatedValuePropagationPass());
     ExtraPasses.addPass(InstCombinePass());
     LoopPassManager LPM;
+    if (PTO.EnableLICM)
     LPM.addPass(LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                          /*AllowSpeculation=*/true));
     if (!PTO.PreserveLoops)
@@ -1426,6 +1433,7 @@ void PassBuilder::addVectorPasses(OptimizationLevel Level,
   //      divide result.
   //   2. It helps to clean up some loop-invariant code created by the loop
   //      unroll pass when IsFullLTO=false.
+  if (PTO.EnableLICM)
   FPM.addPass(createFunctionToLoopPassAdaptor(
       LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                /*AllowSpeculation=*/true),
@@ -1502,7 +1510,7 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
   // early versioning may prevent further inlining due to increase of code
   // size. Other optimizations which runs later might get benefit of no-alias
   // assumption in clone loop.
-  if (UseLoopVersioningLICM) {
+  if (UseLoopVersioningLICM && PTO.EnableLICM) {
     OptimizePM.addPass(
         createFunctionToLoopPassAdaptor(LoopVersioningLICMPass()));
     // LoopVersioningLICM pass might increase new LICM opportunities.
@@ -2062,6 +2070,7 @@ PassBuilder::buildLTODefaultPipeline(OptimizationLevel Level,
   }
 
   FunctionPassManager MainFPM;
+  if (PTO.EnableLICM)
   MainFPM.addPass(createFunctionToLoopPassAdaptor(
       LICMPass(PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
                /*AllowSpeculation=*/true),
