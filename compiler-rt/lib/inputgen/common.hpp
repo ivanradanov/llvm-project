@@ -26,8 +26,8 @@ int VERBOSE = 0;
 int TIMING = 0;
 struct InitGlobalsTy {
   InitGlobalsTy() {
-    VERBOSE = (bool)getenv("VERBOSE");
-    TIMING = (bool)getenv("TIMING");
+    VERBOSE = (bool)getenv("INPUTGEN_VERBOSE");
+    TIMING = (bool)getenv("INPUTGEN_TIMING");
   }
 } InitGlobals;
 } // namespace
@@ -249,7 +249,7 @@ struct ObjectTy {
 
     if (AllocateInputUsed) {
       this->Input.template ensureAllocation<true>(0, Size);
-      // TODO include a mode where we do not tracked Used on per-byte basis, and
+      // TODO include a mode where we do not track Used on per-byte basis, and
       // only the range
       this->Used.template ensureAllocation<true>(0, Size);
     } else {
@@ -426,8 +426,9 @@ public:
     void extendMemory(T *&OldMemory, intptr_t NewAllocationSize,
                       intptr_t NewAllocationOffset) {
       if constexpr (IsBitSet) {
-        NewAllocationSize = NewAllocationSize / 8;
         assert(NewAllocationSize % 8 == 0);
+        static_assert(ObjAlignment % 8 == 0);
+        NewAllocationSize = NewAllocationSize / 8;
       }
       T *NewMemory = reinterpret_cast<T *>(Allocator.Malloc(NewAllocationSize));
       assert(NewMemory && "Malloc failed");
