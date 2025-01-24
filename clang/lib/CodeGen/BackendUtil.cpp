@@ -1011,7 +1011,6 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
 
   PipelineTuningOptions PTO;
   PTO.PreserveLoops = TransformerEnabled && TransformerPreprocessing;
-  PTO.EnableLICM = !TransformerEnabled || !TransformerPreprocessing;
   PTO.LoopUnrolling = !PTO.PreserveLoops && CodeGenOpts.UnrollLoops;
   // For historical reasons, loop interleaving is set to mirror setting for loop
   // unrolling.
