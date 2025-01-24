@@ -1,6 +1,6 @@
 ; RUN: mkdir -p %t/function-wise/
 
-; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime %S/../../../../input-gen-runtimes/rt-input-gen.cpp --input-run-runtime %S/../../../../input-gen-runtimes/rt-run.cpp %s -function foo && %t/function-wise/input-gen.function.foo.generate.a.out %t/function-wise/ 0 1 && %t/function-wise/input-gen.function.foo.run.a.out %t/function-wise/input-gen.function.foo.generate.a.out.input.0.bin) | FileCheck %s
+; RUN: (input-gen -g --verify --output-dir %t/function-wise --compile-input-gen-executables --input-gen-runtime -linputgen.generate --input-run-runtime -linputgen.replay %s -function foo && %t/function-wise/input-gen.function.foo.generate.a.out %t/function-wise/ 0 1 && %t/function-wise/input-gen.function.foo.run.a.out --input %t/function-wise/input-gen.function.foo.generate.a.out.input.0.bin) | FileCheck %s
 ; CHECK: OUTPUT [[o1:.*]]
 ; CHECK-NEXT: OUTPUT [[o2:.*]]
 ; CHECK: OUTPUT [[o1]]
