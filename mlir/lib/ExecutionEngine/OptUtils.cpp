@@ -74,6 +74,7 @@ mlir::makeOptimizingTransformer(unsigned optLevel, unsigned sizeLevel,
     tuningOptions.LoopInterleaving = true;
     tuningOptions.LoopVectorization = true;
     tuningOptions.SLPVectorization = true;
+    tuningOptions.EnableLICM = !getenv("HYDRA_DISABLE_DEVICE_LICM");
 
     PassBuilder pb(targetMachine, tuningOptions);
 
