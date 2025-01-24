@@ -352,40 +352,43 @@ public:
 
   bool compileExecutable(std::string ModuleName, std::string ExecutableName,
                          std::string RuntimeName) {
-    if (ClCompileInputGenExecutables) {
-      LLVM_DEBUG(dbgs() << "Compiling " << ExecutableName << "\n");
-      SmallVector<StringRef, 10> Args = {Clang,         "-ldl",     "-rdynamic",
-                                         RuntimeName,   ModuleName, "-o",
-                                         ExecutableName};
-      if (ClInstrumentModuleForCoverage) {
-        Args.push_back("-u__llvm_profile_runtime");
-        Args.push_back(ClProfilingRuntimePath);
-      }
-      if (ClDebug) {
-        Args.push_back("-g");
-        Args.push_back("-O0");
-      } else {
-        Args.push_back("-O3");
-        Args.push_back("-flto");
-        Args.push_back("-fuse-ld=lld");
-        Args.push_back("-DNDEBUG");
-      }
-      std::string ErrMsg;
-      int Res = sys::ExecuteAndWait(
-          Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
-          /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
-      if (Res) {
-        errs() << "input-gen: executable compilation failed";
-        if (!ErrMsg.empty())
-          errs() << ": " << ErrMsg;
-        errs() << ".\n";
-        errs() << "Args: ";
-        for (auto Arg : Args)
-          errs() << "\"" << Arg << "\" ";
-        errs() << "\n";
-        return false;
-      }
+    assert(ClCompileInputGenExecutables);
+    LLVM_DEBUG(dbgs() << "Compiling " << ExecutableName << "\n");
+    SmallVector<StringRef, 10> Args = {Clang,         "-ldl",     "-rdynamic",
+                                       RuntimeName,   ModuleName, "-o",
+                                       ExecutableName};
+    if (ClInstrumentModuleForCoverage) {
+      Args.push_back("-u__llvm_profile_runtime");
+      Args.push_back(ClProfilingRuntimePath);
     }
+    if (ClDebug) {
+      Args.push_back("-g");
+      Args.push_back("-O0");
+    } else {
+      Args.push_back("-O3");
+      Args.push_back("-flto");
+      Args.push_back("-fuse-ld=lld");
+      Args.push_back("-DNDEBUG");
+    }
+    std::string ErrMsg;
+    int Res = sys::ExecuteAndWait(
+        Args[0], Args, /*Env=*/std::nullopt, /*Redirects=*/{},
+        /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
+    if (Res) {
+      errs() << "input-gen: executable compilation failed";
+      if (!ErrMsg.empty())
+        errs() << ": " << ErrMsg;
+      errs() << ".\n";
+      errs() << "Args: ";
+      for (auto Arg : Args)
+        errs() << "\"" << Arg << "\" ";
+      errs() << "\n";
+      return false;
+    }
+    errs() << "Args: ";
+    for (auto Arg : Args)
+      errs() << "\"" << Arg << "\" ";
+    errs() << "\n";
 
     return true;
   }
