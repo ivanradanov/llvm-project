@@ -1453,14 +1453,12 @@ void collect_access_to_array(Scop &S, isl_union_map *&access_to_array) {
     for (MemoryAccess *MA : Stmt) {
       isl::id accessId = MA->getId();
       isl::map rel = MA->getAccessRelation();
-      isl::set arraySet = rel.range().space().universe_set();
+      isl::space arraySpace = rel.range().space();
+      isl::set arraySet = arraySpace.universe_set();
+      arraySpace = arraySpace.drop_dims(
+          isl::dim::set, 0, unsignedFromIslSize(arraySpace.dim(isl::dim::set)));
       isl::set accessSet =
-          arraySet.space()
-              .drop_dims(
-                  isl::dim::set, 0,
-                  unsignedFromIslSize(arraySet.space().dim(isl::dim::set)))
-              .set_tuple_id(isl::dim::set, accessId)
-              .universe_set();
+          arraySpace.set_tuple_id(isl::dim::set, accessId).universe_set();
       isl::map map = isl::map::from_domain_and_range(accessSet, arraySet);
       if (!access_to_array)
         access_to_array = map.to_union_map().release();

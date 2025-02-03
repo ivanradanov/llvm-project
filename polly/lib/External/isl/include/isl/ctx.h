@@ -272,6 +272,7 @@ void isl_ctx_set_error(isl_ctx *ctx, enum isl_error error);
 	} while (0)
 #define ISL_DUMP(f, obj)                                                       \
 	ISL_DEBUG({                                                                \
+		fprintf(stderr, #obj ": ");                                            \
 		if (obj)                                                               \
 			f(obj);                                                            \
 		else                                                                   \

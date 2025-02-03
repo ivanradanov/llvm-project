@@ -43,6 +43,8 @@
 #include "isl_scheduler.h"
 #include "isl_scheduler_clustering.h"
 
+#include <limits.h>
+
 /*
  * The scheduling algorithm implemented in this file was inspired by
  * Bondhugula et al., "Automatic Transformations for Communication-Minimized
@@ -3827,6 +3829,8 @@ static isl_union_set *get_array_for_access(
 	return array_set;
 }
 
+isl_union_set *isl_union_set_to_tags(isl_union_set *uset_);
+
 /* Are the condition dependences of "edge" local with respect to
  * the current schedule?
  *
@@ -3855,7 +3859,10 @@ static int is_condition_false(
 	ISL_DUMP(isl_union_set_dump, arrays_domain);
 	ISL_DUMP(isl_union_set_dump, arrays_range);
 
-	int expansion_factor = 1;
+	isl_union_set *arrays = isl_union_set_union(arrays_range, arrays_domain);
+	ISL_DUMP(isl_union_set_dump, arrays);
+	arrays = isl_union_set_to_tags(arrays);
+	ISL_DUMP(isl_union_set_dump, arrays);
 
 	umap = isl_union_map_copy(edge->tagged_condition);
 	umap = isl_union_map_zip(umap);
@@ -3866,6 +3873,39 @@ static int is_condition_false(
 	map = isl_map_apply_domain(map, sched);
 	sched = node_extract_schedule(edge->dst);
 	map = isl_map_apply_range(map, sched);
+
+	int sched_dim = isl_space_dim(isl_map_get_space(map), isl_dim_in);
+	isl_assert(isl_map_get_ctx(map), sched_dim >= 0, abort());
+	for (int row = 0; row < sched_dim; row++) {
+		unsigned expansion = UINT_MAX;
+
+		isl_set_list *sl =
+			isl_union_set_get_set_list(graph->live_range_maximal_arrays);
+		for (int j = 0; j < graph->n_array; ++j) {
+			if (!graph->array_size)
+				return NULL;
+
+			isl_set *set = isl_set_list_get_set(sl, j);
+			isl_id *id = isl_set_get_tuple_id(set);
+			isl_id *target_id = isl_id_to_id_get(graph->array_table, id);
+			if (!target_id)
+				return NULL;
+			int array_id = (int)isl_id_get_user(target_id) - 1;
+			int val = isl_val_get_num_si(isl_mat_get_element_val(
+				graph->overlapping_maximal_live_ranges, row, array_id));
+
+			if (!isl_union_set_is_empty(isl_union_set_intersect(
+					isl_union_set_universe(isl_set_to_union_set(set)),
+					isl_union_set_copy(arrays))) &&
+				expansion > val)
+				expansion = val;
+		}
+
+		if (expansion == UINT_MAX)
+			expansion = 1;
+		ISL_DEBUG(
+			fprintf(stderr, "expansion in dim %d is %d\n", row, expansion));
+	}
 
 	test = isl_map_identity(isl_map_get_space(map));
 	ISL_DEBUG(fprintf(stderr, "Is subset?\n"));

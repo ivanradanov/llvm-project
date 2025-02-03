@@ -5,11 +5,13 @@
 #include "isl/schedule_node.h"
 #include "isl/schedule_type.h"
 #include "isl/union_map.h"
+#include "isl/union_set.h"
 #include <iostream>
 #include <limits>
 #include <vector>
 
 #include "cpp_functions.h"
+#include "polly/Support/ISLTools.h"
 
 isl::stat isl_id_to_id_foreach(
 	isl_id_to_id *id_to_id, std::function<isl::stat(isl::id, isl::id)> f)
@@ -304,4 +306,23 @@ isl_union_map *isl_ast_generate_array_expansion_indexing(
 			  isl_union_map_dump(extra_umap.get()));
 
 	return extra_umap.release();
+}
+
+extern "C" isl_union_set *isl_union_set_to_tags(isl_union_set *uset_)
+{
+	isl::union_set uset = isl::manage(uset_);
+	isl::union_set tag_uset =
+		isl::manage(isl_union_set_empty(uset.space().release()));
+	uset.foreach_set([&](isl::set set) {
+		isl::space space = set.space();
+		isl::set tag_set =
+			space
+				.drop_dims(isl::dim::set, 0,
+					unsignedFromIslSize(space.dim(isl::dim::set)))
+				.set_tuple_id(isl::dim::set, space.tuple_id(isl::dim::set))
+				.universe_set();
+		tag_uset = tag_uset.unite(tag_set.to_union_set());
+		return isl::stat::ok();
+	});
+	return tag_uset.release();
 }
