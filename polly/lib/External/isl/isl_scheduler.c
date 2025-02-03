@@ -1522,6 +1522,7 @@ isl_stat isl_sched_graph_init(struct isl_sched_graph *graph,
 		return isl_stat_error;
 
 	graph->array_size = isl_schedule_constraints_get_array_size(sc);
+	graph->access_to_array = isl_schedule_constraints_get_access_to_array(sc);
 
 	graph->n_cache = isl_schedule_constraints_get_n_cache(sc);
 	for (int i = 0; i < graph->n_cache; i++)
@@ -3815,6 +3816,17 @@ static int range_intersects(__isl_keep isl_union_map *umap,
 	return empty < 0 ? -1 : !empty;
 }
 
+/// access is of the form {[Stmt[] -> Access[]]}
+static isl_union_set *get_array_for_access(
+	struct isl_sched_graph *graph, __isl_take isl_union_set *access)
+{
+	isl_union_set *access_set = isl_union_set_universe(
+		isl_union_map_range(isl_union_set_unwrap(access)));
+	isl_union_set *array_set = isl_union_set_apply(
+		access_set, isl_union_map_copy(graph->access_to_array));
+	return array_set;
+}
+
 /* Are the condition dependences of "edge" local with respect to
  * the current schedule?
  *
@@ -3823,7 +3835,8 @@ static int range_intersects(__isl_keep isl_union_map *umap,
  *
  * In other words, is the condition false?
  */
-static int is_condition_false(struct isl_sched_edge *edge)
+static int is_condition_false(
+	struct isl_sched_edge *edge, struct isl_sched_graph *graph)
 {
 	isl_union_map *umap;
 	isl_map *map, *sched, *test;
@@ -3832,6 +3845,17 @@ static int is_condition_false(struct isl_sched_edge *edge)
 	empty = isl_union_map_is_empty(edge->tagged_condition);
 	if (empty < 0 || empty)
 		return empty;
+
+	isl_union_set *arrays_domain = get_array_for_access(graph,
+		isl_union_map_domain(isl_union_map_copy(edge->tagged_condition)));
+	isl_union_set *arrays_range = get_array_for_access(
+		graph, isl_union_map_range(isl_union_map_copy(edge->tagged_condition)));
+
+	ISL_DEBUG(fprintf(stderr, "Arrays:\n"));
+	ISL_DUMP(isl_union_set_dump, arrays_domain);
+	ISL_DUMP(isl_union_set_dump, arrays_range);
+
+	int expansion_factor = 1;
 
 	umap = isl_union_map_copy(edge->tagged_condition);
 	umap = isl_union_map_zip(umap);
@@ -3844,6 +3868,13 @@ static int is_condition_false(struct isl_sched_edge *edge)
 	map = isl_map_apply_range(map, sched);
 
 	test = isl_map_identity(isl_map_get_space(map));
+	ISL_DEBUG(fprintf(stderr, "Is subset?\n"));
+	ISL_DUMP(isl_union_map_dump, edge->tagged_condition);
+	ISL_DUMP(isl_union_set_dump, edge->live_range_span_arrays);
+	ISL_DUMP(isl_union_set_dump, edge->live_range_maximal_span_arrays);
+	ISL_DUMP(isl_map_dump, map);
+	ISL_DUMP(isl_map_dump, test);
+	ISL_DUMP(isl_mat_dump, graph->overlapping_maximal_live_ranges);
 	local = isl_map_is_subset(map, test);
 	isl_map_free(map);
 	isl_map_free(test);
@@ -3920,15 +3951,23 @@ static int update_edges(isl_ctx *ctx, struct isl_sched_graph *graph)
 		isl_union_set *uset;
 		isl_union_map *umap;
 
+		ISL_DEBUG(fprintf(stderr, "Handling edge:\n"));
+		ISL_DUMP(isl_map_dump, graph->edge[i].map);
+		ISL_DUMP(isl_union_map_dump, graph->edge[i].tagged_condition);
+		ISL_DUMP(isl_union_map_dump, graph->edge[i].tagged_validity);
+
 		if (!isl_sched_edge_is_condition(&graph->edge[i]))
 			continue;
+		ISL_DEBUG(fprintf(stderr, "Is condition\n"));
 		if (is_local(&graph->edge[i]))
 			continue;
-		local = is_condition_false(&graph->edge[i]);
+		ISL_DEBUG(fprintf(stderr, "Is not local edge\n"));
+		local = is_condition_false(&graph->edge[i], graph);
 		if (local < 0)
 			goto error;
 		if (local)
 			continue;
+		ISL_DEBUG(fprintf(stderr, "Condition is false i.e. is not local\n"));
 
 		any = 1;
 
@@ -3946,6 +3985,7 @@ static int update_edges(isl_ctx *ctx, struct isl_sched_graph *graph)
 			goto error;
 	}
 
+	ISL_DEBUG(fprintf(stderr, "Any %d\n", any));
 	if (any)
 		return unconditionalize_adjacent_validity(graph, source, sink);
 
@@ -4238,6 +4278,12 @@ isl_stat isl_sched_graph_extract_sub_graph(isl_ctx *ctx,
 	if (graph->array_size) {
 		sub->array_size = isl_union_map_copy(graph->array_size);
 		if (!sub->array_size)
+			return isl_stat_error;
+	}
+
+	if (graph->access_to_array) {
+		sub->access_to_array = isl_union_map_copy(graph->access_to_array);
+		if (!sub->access_to_array)
 			return isl_stat_error;
 	}
 
@@ -6123,7 +6169,7 @@ static int has_adjacent_true_conditions(struct isl_sched_graph *graph,
 
 		set_local(&graph->edge[i]);
 
-		local = is_condition_false(&graph->edge[i]);
+		local = is_condition_false(&graph->edge[i], graph);
 		if (local < 0)
 			return -1;
 		if (!local)

@@ -48,6 +48,7 @@ struct isl_schedule_constraints {
 	int n_cache;
 	int cache_size[ISL_MAX_CACHES];
 	isl_union_map *array_size;
+	isl_union_map *access_to_array;
 };
 
 __isl_give isl_schedule_constraints *isl_schedule_constraints_copy(
@@ -78,6 +79,7 @@ __isl_give isl_schedule_constraints *isl_schedule_constraints_copy(
 		sc_copy->cache_size[i] = sc->cache_size[i];
 
 	sc_copy->array_size = isl_union_map_copy(sc->array_size);
+	sc_copy->access_to_array = isl_union_map_copy(sc->access_to_array);
 
 	return sc_copy;
 }
@@ -276,6 +278,15 @@ __isl_give isl_schedule_constraints *isl_schedule_constraints_set_array_sizes(
 	return sc;
 }
 
+__isl_give isl_schedule_constraints *
+isl_schedule_constraints_set_access_to_array(
+	__isl_take isl_schedule_constraints *sc,
+	__isl_take isl_union_map *access_to_arrays)
+{
+	sc->access_to_array = access_to_arrays;
+	return sc;
+}
+
 /* Replace the proximity constraints of "sc" by "proximity".
  */
 __isl_give isl_schedule_constraints *isl_schedule_constraints_set_proximity(
@@ -403,6 +414,12 @@ __isl_give int
 isl_schedule_constraints_get_cache_size(__isl_keep isl_schedule_constraints *sc,
 										int i) {
 	return sc->cache_size[i];
+}
+
+__isl_give isl_union_map *isl_schedule_constraints_get_access_to_array(
+	__isl_keep isl_schedule_constraints *sc)
+{
+	return isl_union_map_copy(sc->access_to_array);
 }
 
 __isl_give isl_union_map *isl_schedule_constraints_get_array_size(
@@ -629,8 +646,10 @@ __isl_give isl_printer *isl_printer_print_schedule_constraints(
 						sc->context);
 	for (int i = isl_edge_first; i <= isl_edge_last; i++)
 		p = print_constraint(p, sc, i);
-	p = print_yaml_field_union_set(p, key_str[isl_sc_key_array_size],
-								   sc->array_size);
+	p = print_yaml_field_union_map(
+		p, key_str[isl_sc_key_array_size], sc->array_size);
+	p = print_yaml_field_union_map(
+		p, key_str[isl_sc_key_array_size], sc->access_to_array);
 	p = isl_printer_yaml_end_mapping(p);
 
 	return p;

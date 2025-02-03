@@ -494,6 +494,8 @@ static __isl_give isl_schedule_constraints *collect_constraints(
 	sc = isl_schedule_constraints_set_caches(sc, 1, &cache_size);
 	sc = isl_schedule_constraints_set_array_sizes(
 		sc, isl_union_map_copy(graph->array_size));
+	sc = isl_schedule_constraints_set_access_to_array(
+		sc, isl_union_map_copy(graph->access_to_array));
 
 	return sc;
 }

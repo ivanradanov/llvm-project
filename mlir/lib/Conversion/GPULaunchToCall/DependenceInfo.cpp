@@ -1448,6 +1448,28 @@ bool gpu_array_can_be_private(ScopArrayInfo &sai) {
   return ty && mlir::nvgpu::NVGPUDialect::hasGlobalMemoryAddressSpace(ty);
 }
 
+void collect_access_to_array(Scop &S, isl_union_map *&access_to_array) {
+  for (ScopStmt &Stmt : S) {
+    for (MemoryAccess *MA : Stmt) {
+      isl::id accessId = MA->getId();
+      isl::map rel = MA->getAccessRelation();
+      isl::set arraySet = rel.range().space().universe_set();
+      isl::set accessSet =
+          arraySet.space()
+              .drop_dims(
+                  isl::dim::set, 0,
+                  unsignedFromIslSize(arraySet.space().dim(isl::dim::set)))
+              .set_tuple_id(isl::dim::set, accessId)
+              .universe_set();
+      isl::map map = isl::map::from_domain_and_range(accessSet, arraySet);
+      if (!access_to_array)
+        access_to_array = map.to_union_map().release();
+      else
+        access_to_array = isl_union_map_add_map(access_to_array, map.release());
+    }
+  }
+}
+
 void collect_order_dependences(Scop &S, ppcg_scop *scop) {
   isl_space *space;
   isl_union_map *accesses;
@@ -1554,6 +1576,8 @@ ppcg_scop *computeDeps(Scop &S) {
   ps->atagger = isl_union_pw_multi_aff_copy(array_ps->tagger);
   ps->atagged_dep_flow = isl_union_map_copy(array_ps->tagged_dep_flow);
 
+  collect_access_to_array(S, ps->access_to_array);
+
 #define PPCGSCOPDUMP(field)                                                    \
   dbgs() << #field << " " << isl_union_map_to_str(ps->field) << '\n'
   POLLY_DEBUG({
@@ -1583,6 +1607,7 @@ ppcg_scop *computeDeps(Scop &S) {
     PPCGSCOPDUMP(tagged_dep_order);
     PPCGSCOPDUMP(dep_async);
     PPCGSCOPDUMP(array_order);
+    PPCGSCOPDUMP(access_to_array);
     dbgs() << "tagger" << " " << isl_union_pw_multi_aff_to_str(ps->tagger)
            << '\n';
     dbgs() << "atagger" << " " << isl_union_pw_multi_aff_to_str(ps->atagger)

@@ -270,5 +270,12 @@ void isl_ctx_set_error(isl_ctx *ctx, enum isl_error error);
 		if (getenv("ISL_DEBUG"))                                               \
 			code;                                                              \
 	} while (0)
+#define ISL_DUMP(f, obj)                                                       \
+	ISL_DEBUG({                                                                \
+		if (obj)                                                               \
+			f(obj);                                                            \
+		else                                                                   \
+			fprintf(stderr, "(nil)\n");                                        \
+	})
 
 #endif

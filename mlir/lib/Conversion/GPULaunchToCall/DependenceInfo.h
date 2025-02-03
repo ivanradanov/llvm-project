@@ -264,6 +264,8 @@ struct ppcg_scop {
 	struct pet_scop *pet;
 
   isl_union_map *array_order;
+
+  isl_union_map *access_to_array;
 };
 // clang-format on
 // ############### PPCG DECLS END ###############

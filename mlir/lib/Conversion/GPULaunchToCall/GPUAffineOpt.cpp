@@ -288,6 +288,9 @@ construct_schedule_constraints(struct ppcg_scop *scop, polymer::Scop &S) {
     return nullptr;
   }
 
+  sc = isl_schedule_constraints_set_access_to_array(
+      sc, isl_union_map_copy(scop->access_to_array));
+
   return sc;
 }
 

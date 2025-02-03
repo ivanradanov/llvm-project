@@ -279,6 +279,7 @@ struct isl_sched_graph {
 	int cache_size[ISL_MAX_CACHES];
 	isl_union_map *array_size;
 	isl_mat *overlapping_maximal_live_ranges;
+	isl_union_map *access_to_array;
 
 	int n_bands_found;
 };
