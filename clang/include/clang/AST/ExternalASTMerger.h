@@ -180,7 +180,7 @@ public:
   ASTImporter &ImporterForOrigin(ASTContext &OriginContext);
 
   /// Sets the current log stream.
-  void SetLogStream(llvm::raw_string_ostream &Stream) { LogStream = &Stream; }
+  void SetLogStream(llvm::raw_ostream &Stream) { LogStream = &Stream; }
 private:
   /// Records and origin in Origins.
   void RecordOriginImpl(const DeclContext *ToDC, DCOrigin Origin,

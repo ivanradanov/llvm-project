@@ -32,6 +32,7 @@ namespace {
     const ASTContext &Context;
     unsigned Indentation;
     bool PrintInstantiation;
+    std::function<bool(const Decl *)> *Filter;
 
     raw_ostream& Indent() { return Indent(Indentation); }
     raw_ostream& Indent(unsigned Indentation);
@@ -53,9 +54,12 @@ namespace {
   public:
     DeclPrinter(raw_ostream &Out, const PrintingPolicy &Policy,
                 const ASTContext &Context, unsigned Indentation = 0,
-                bool PrintInstantiation = false)
+                bool PrintInstantiation = false,
+                std::function<bool(const Decl *)> *Filter = nullptr)
         : Out(Out), Policy(Policy), Context(Context), Indentation(Indentation),
-          PrintInstantiation(PrintInstantiation) {}
+          PrintInstantiation(PrintInstantiation), Filter(Filter) {}
+
+    bool ShouldPrint(const Decl *D) { return !Filter || (*Filter)(D); }
 
     void VisitDeclContext(DeclContext *DC, bool Indent = true);
 
@@ -133,9 +137,10 @@ void Decl::print(raw_ostream &Out, unsigned Indentation,
 }
 
 void Decl::print(raw_ostream &Out, const PrintingPolicy &Policy,
-                 unsigned Indentation, bool PrintInstantiation) const {
+                 unsigned Indentation, bool PrintInstantiation,
+                 std::function<bool(const Decl *)> *Filter) const {
   DeclPrinter Printer(Out, Policy, getASTContext(), Indentation,
-                      PrintInstantiation);
+                      PrintInstantiation, Filter);
   Printer.Visit(const_cast<Decl*>(this));
 }
 
@@ -427,6 +432,8 @@ void DeclPrinter::VisitDeclContext(DeclContext *DC, bool Indent) {
   SmallVector<Decl*, 2> Decls;
   for (DeclContext::decl_iterator D = DC->decls_begin(), DEnd = DC->decls_end();
        D != DEnd; ++D) {
+    if (!ShouldPrint(*D))
+      continue;
 
     // Don't print ObjCIvarDecls, as they are printed when visiting the
     // containing ObjCInterfaceDecl.
