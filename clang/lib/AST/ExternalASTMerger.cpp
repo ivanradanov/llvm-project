@@ -237,6 +237,13 @@ public:
       ToContainer->getPrimaryContext()->setMustBuildLookupTable();
       assert(Parent.CanComplete(ToContainer));
     }
+
+    NamedDecl *ND;
+    if (!To->hasBody() && (ND = dyn_cast<NamedDecl>(To))) {
+      Parent.FindExternalVisibleDeclsByName(
+          To->getDeclContext(), ND->getDeclName(), ND->getDeclContext());
+    }
+
   }
   ASTImporter &GetReverse() { return Reverse; }
 };
@@ -275,7 +282,7 @@ bool ExternalASTMerger::HasImporterForOrigin(ASTContext &OriginContext) {
 
 template <typename CallbackType>
 void ExternalASTMerger::ForEachMatchingDC(const DeclContext *DC,
-                                          CallbackType Callback) {
+                                          CallbackType Callback, bool AllowNonExisting) {
   if (auto It = Origins.find(DC); It != Origins.end()) {
     ExternalASTMerger::DCOrigin Origin = It->second;
     LazyASTImporter &Importer = LazyImporterForOrigin(*this, *Origin.AST);
@@ -293,12 +300,14 @@ void ExternalASTMerger::ForEachMatchingDC(const DeclContext *DC,
           break;
       }
     }
-    if (!DidCallback && LoggingEnabled())
-      logs() << "(ExternalASTMerger*)" << (void*)this
-             << " asserting for (DeclContext*)" << (const void*)DC
-             << ", (ASTContext*)" << (void*)&Target.AST
-             << "\n";
-    assert(DidCallback && "Couldn't find a source context matching our DC");
+    if (!AllowNonExisting) {
+      if (!DidCallback && LoggingEnabled())
+        logs() << "(ExternalASTMerger*)" << (void*)this
+               << " asserting for (DeclContext*)" << (const void*)DC
+               << ", (ASTContext*)" << (void*)&Target.AST
+               << "\n";
+      assert(DidCallback && "Couldn't find a source context matching our DC");
+    }
   }
 }
 
@@ -496,7 +505,7 @@ bool ExternalASTMerger::FindExternalVisibleDeclsByName(
                         FilterFoundDecl(std::make_pair(FromD, &Forward));
                       }
                       return false;
-                    });
+                    }, true);
 
   if (Candidates.empty())
     return false;

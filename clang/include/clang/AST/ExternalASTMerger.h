@@ -189,7 +189,7 @@ private:
   /// Performs an action for every DeclContext that is identified as
   /// corresponding (either by forced origin or by name lookup) to DC.
   template <typename CallbackType>
-  void ForEachMatchingDC(const DeclContext *DC, CallbackType Callback);
+  void ForEachMatchingDC(const DeclContext *DC, CallbackType Callback, bool AllowNonExisting = false);
 
 public:
   /// Log something if there is a logging callback installed.
