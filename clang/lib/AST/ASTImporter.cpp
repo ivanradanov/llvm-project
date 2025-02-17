@@ -449,10 +449,12 @@ namespace clang {
     }
 
     Error ImportInitializer(VarDecl *From, VarDecl *To);
-    Error ImportDefinition(RecordDecl *From, RecordDecl *To,
-                           ImportDefinitionKind Kind = IDK_Everything);
-    Error ImportDefinition(EnumDecl *From, EnumDecl *To,
-                           ImportDefinitionKind Kind = IDK_Everything);
+    Error ImportDefinition(
+        RecordDecl *From, RecordDecl *To,
+        ImportDefinitionKind Kind = IDK_Default);
+    Error ImportDefinition(
+        EnumDecl *From, EnumDecl *To,
+        ImportDefinitionKind Kind = IDK_Default);
     Error ImportDefinition(
         ObjCInterfaceDecl *From, ObjCInterfaceDecl *To,
         ImportDefinitionKind Kind = IDK_Default);
@@ -2087,9 +2089,8 @@ ASTNodeImporter::ImportDeclContext(DeclContext *FromDC, bool ForceImport) {
   // different values in two distinct translation units.
   ChildErrorHandlingStrategy HandleChildErrors(FromDC);
 
-  auto MightNeedReordering = [FromDC](const Decl *D) {
-    return isa<RecordDecl>(FromDC) || isa<FieldDecl>(D) ||
-           isa<IndirectFieldDecl>(D) || isa<FriendDecl>(D);
+  auto MightNeedReordering = [](const Decl *D) {
+    return isa<FieldDecl>(D) || isa<IndirectFieldDecl>(D) || isa<FriendDecl>(D);
   };
 
   // Import everything that might need reordering first.
@@ -3326,9 +3327,6 @@ ExpectedDecl ASTNodeImporter::VisitRecordDecl(RecordDecl *D) {
   if (D->isCompleteDefinition())
     if (Error Err = ImportDefinition(D, D2, IDK_Default))
       return std::move(Err);
-
-  if (Error Err = ImportDeclContext(D, true))
-    return std::move(Err);
 
   return D2;
 }
