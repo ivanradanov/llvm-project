@@ -985,7 +985,10 @@ int main(int argc, const char **argv) {
   llvm::InitializeAllAsmParsers();
 
   static llvm::cl::opt<std::string> BuildPath(
-      "p", llvm::cl::desc("Build path"), llvm::cl::Required,
+      "p", llvm::cl::desc("Build path"), llvm::cl::cat(InputGenMinimizeCat),
+      llvm::cl::sub(llvm::cl::SubCommand::getAll()));
+  static llvm::cl::list<std::string> SourcePaths(
+      llvm::cl::Positional, llvm::cl::desc("<source0> [... <sourceN>]"),
       llvm::cl::cat(InputGenMinimizeCat),
       llvm::cl::sub(llvm::cl::SubCommand::getAll()));
   llvm::cl::ResetAllOptionOccurrences();
@@ -1005,22 +1008,42 @@ int main(int argc, const char **argv) {
     }
   }
 
-  if (BuildPath.empty()) {
-    llvm::errs() << "Build path needs to be specified.\n";
+  std::vector<std::string> SourcePathList = SourcePaths;
+
+  if (BuildPath.getNumOccurrences() == 0 && SourcePaths.size() == 0) {
+    llvm::errs() << "Either build path or source paths must be specified\n";
+    return 1;
+  }
+  if (BuildPath.getNumOccurrences() > 0 && SourcePaths.size() > 0) {
+    llvm::errs()
+        << "Only one of build path or source paths must be specified\n";
     return 1;
   }
 
-  std::unique_ptr<CompilationDatabase> Compilations =
-      CompilationDatabase::autoDetectFromDirectory(BuildPath, ErrorMessage);
+  std::unique_ptr<CompilationDatabase> Compilations;
+  std::vector<std::string> Files;
+
+  if (BuildPath.getNumOccurrences() > 0) {
+    llvm::errs() << "Detecting from path " << BuildPath << "\n";
+    Compilations =
+        CompilationDatabase::autoDetectFromDirectory(BuildPath, ErrorMessage);
+    Files = Compilations->getAllFiles();
+    llvm::errs() << "Running with files:\n";
+    for (auto F : Files)
+      llvm::errs() << F << "\n";
+  } else {
+    llvm::errs() << "Running without flags\n";
+    Compilations.reset(
+        new FixedCompilationDatabase(".", std::vector<std::string>()));
+    Files = SourcePathList;
+  }
+
   if (!Compilations) {
     llvm::errs() << "Error while trying to load a compilation database:\n"
-                 << ErrorMessage << "Running without flags.\n";
+                 << ErrorMessage << "\n";
     return 1;
   }
 
-  auto Files = Compilations->getAllFiles();
-  for (auto F : Files)
-    llvm::errs() << F << "\n";
   ClangTool Tool(*Compilations, Files);
 
   MinimizeActionFactory MinimizeFactory;
