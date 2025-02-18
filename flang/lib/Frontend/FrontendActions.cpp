@@ -19,6 +19,8 @@
 #include "flang/Lower/Bridge.h"
 #include "flang/Lower/PFTBuilder.h"
 #include "flang/Lower/Support/Verifier.h"
+#include "flang/Optimizer/Dialect/FIROps.h"
+#include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/Dialect/Support/FIRContext.h"
 #include "flang/Optimizer/Dialect/Support/KindMapping.h"
 #include "flang/Optimizer/Support/DataLayout.h"
@@ -52,6 +54,7 @@
 #include "llvm/Analysis/TargetTransformInfo.h"
 #include "llvm/Bitcode/BitcodeWriterPass.h"
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/LLVMRemarkStreamer.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
@@ -74,7 +77,11 @@
 #include "llvm/TargetParser/RISCVTargetParser.h"
 #include "llvm/Transforms/IPO/Internalize.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
+#include <llvm/IR/InstrTypes.h>
 #include <memory>
+#include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/PatternMatch.h>
+#include <mlir/IR/SymbolTable.h>
 #include <system_error>
 
 #include "flang/Tools/CLOptions.inc"
@@ -221,6 +228,9 @@ static void addAMDGPUSpecificMLIRItems(mlir::ModuleOp &mlirModule,
   builder.insert(covInfo);
 }
 
+mlir::LogicalResult enzymePreprocessMLIRModule(mlir::ModuleOp _mlirModule);
+mlir::LogicalResult enzymePreprocessLLVMModule(llvm::Module *llvmModule);
+
 bool CodeGenAction::beginSourceFileAction() {
   llvmCtx = std::make_unique<llvm::LLVMContext>();
   CompilerInstance &ci = this->getInstance();
@@ -319,6 +329,9 @@ bool CodeGenAction::beginSourceFileAction() {
   // constants etc.
   addDependentLibs(*mlirModule, ci);
   addAMDGPUSpecificMLIRItems(*mlirModule, ci);
+
+  if (enzymePreprocessMLIRModule(mlirModule.get()).failed())
+    return false;
 
   // run the default passes.
   mlir::PassManager pm((*mlirModule)->getName(),
@@ -878,6 +891,10 @@ void CodeGenAction::generateLLVMIR() {
       llvmModule->setLargeDataThreshold(opts.LargeDataThreshold);
     }
   }
+
+  if (enzymePreprocessLLVMModule(&*llvmModule).failed())
+    return;
+
 }
 
 static std::unique_ptr<llvm::raw_pwrite_stream>
