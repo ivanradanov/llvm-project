@@ -544,7 +544,7 @@ public:
       Out << Indent << "CurArg += 16;\n";
     }
 
-    Out << Indent << FD->getNameAsString() << "(";
+    Out << Indent << FD->getQualifiedNameAsString() << "(";
     for (unsigned I = 0; I < FD->getNumParams(); I++) {
       if (I != 0)
         Out << ", ";
