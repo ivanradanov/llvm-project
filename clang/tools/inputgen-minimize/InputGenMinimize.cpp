@@ -857,6 +857,12 @@ llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
     ASTConsumers.push_back(CreateASTPrinter(nullptr, ""));
   }
 
+  // Re-Begin the import CIs because we may emit diagnostics from their contexts
+  // and that needs an in-processing source file to work
+  for (auto &ImportCI : Imports)
+    ImportCI.getDiagnosticClient().BeginSourceFile(
+        ImportCI.getCompilerInstance().getLangOpts());
+
   CI.getDiagnosticClient().BeginSourceFile(
       CI.getCompilerInstance().getLangOpts(),
       &CI.getCompilerInstance().getPreprocessor());
@@ -866,6 +872,8 @@ llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
   if (llvm::Error PE = ParseSource(Path, CI.getCompilerInstance(), Consumers))
     return std::move(PE);
   CI.getDiagnosticClient().EndSourceFile();
+  for (auto &ImportCI : Imports)
+    ImportCI.getDiagnosticClient().EndSourceFile();
   if (CI.getDiagnosticClient().getNumErrors())
     return llvm::make_error<llvm::StringError>(
         "Errors occurred while parsing the expression.", std::error_code());
