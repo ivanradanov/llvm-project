@@ -483,6 +483,9 @@ class TypeSourceInfo;
 
     llvm::Expected<OMPClause *> Import(const OMPClause *OMPC);
 
+    llvm::Expected<CapturedStmt::Capture>
+    Import(const CapturedStmt::Capture &C);
+
     /// Import the definition of the given declaration, including all of
     /// the declarations it contains.
     [[nodiscard]] llvm::Error ImportDefinition(Decl *From);

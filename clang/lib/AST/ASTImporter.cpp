@@ -520,6 +520,7 @@ namespace clang {
     ExpectedDecl VisitRecordDecl(RecordDecl *D);
     ExpectedDecl VisitEnumConstantDecl(EnumConstantDecl *D);
     ExpectedDecl VisitFunctionDecl(FunctionDecl *D);
+    ExpectedDecl VisitCapturedDecl(CapturedDecl *D);
     ExpectedDecl VisitCXXMethodDecl(CXXMethodDecl *D);
     ExpectedDecl VisitCXXConstructorDecl(CXXConstructorDecl *D);
     ExpectedDecl VisitCXXDestructorDecl(CXXDestructorDecl *D);
@@ -592,7 +593,7 @@ namespace clang {
     // FIXME: SEHFinallyStmt
     // FIXME: SEHTryStmt
     // FIXME: SEHLeaveStmt
-    // FIXME: CapturedStmt
+    ExpectedStmt VisitCapturedStmt(CapturedStmt *S);
     ExpectedStmt VisitCXXCatchStmt(CXXCatchStmt *S);
     ExpectedStmt VisitCXXTryStmt(CXXTryStmt *S);
     ExpectedStmt VisitCXXForRangeStmt(CXXForRangeStmt *S);
@@ -4143,6 +4144,16 @@ ExpectedDecl ASTNodeImporter::VisitFunctionDecl(FunctionDecl *D) {
   return ToFunction;
 }
 
+ExpectedDecl ASTNodeImporter::VisitCapturedDecl(CapturedDecl *D) {
+  DeclContext *DC, *LexicalDC;
+  if (Error Err = ImportDeclContext(D, DC, LexicalDC))
+    return std::move(Err);
+  CapturedDecl *ImportedD =
+      CapturedDecl::Create(Importer.getToContext(), DC, D->getNumParams());
+  Importer.MapImported(D, ImportedD);
+  return ImportedD;
+}
+
 ExpectedDecl ASTNodeImporter::VisitCXXMethodDecl(CXXMethodDecl *D) {
   return VisitFunctionDecl(D);
 }
@@ -7150,6 +7161,21 @@ ExpectedStmt ASTNodeImporter::VisitReturnStmt(ReturnStmt *S) {
 
   return ReturnStmt::Create(Importer.getToContext(), ToReturnLoc, ToRetValue,
                             ToNRVOCandidate);
+}
+
+ExpectedStmt ASTNodeImporter::VisitCapturedStmt(CapturedStmt *S) {
+  Error Err = Error::success();
+  auto Captured = importChecked(Err, S->getCapturedStmt());
+  SmallVector<CapturedStmt::Capture> Captures;
+  Err = ImportContainerChecked(S->captures(), Captures);
+  SmallVector<Expr *> CaptureInits;
+  Err = ImportContainerChecked(S->capture_inits(), CaptureInits);
+  auto CD = importChecked(Err, S->getCapturedDecl());
+  auto RD =
+      const_cast<RecordDecl *>(importChecked(Err, S->getCapturedRecordDecl()));
+  return CapturedStmt::Create(Importer.getToContext(), Captured,
+                              S->getCapturedRegionKind(), Captures,
+                              CaptureInits, CD, RD);
 }
 
 ExpectedStmt ASTNodeImporter::VisitCXXCatchStmt(CXXCatchStmt *S) {
@@ -10218,6 +10244,17 @@ ASTImporter::Import(const CXXBaseSpecifier *BaseSpec) {
 llvm::Expected<APValue> ASTImporter::Import(const APValue &FromValue) {
   ASTNodeImporter Importer(*this);
   return Importer.ImportAPValue(FromValue);
+}
+
+llvm::Expected<CapturedStmt::Capture>
+ASTImporter::Import(const CapturedStmt::Capture &C) {
+  ExpectedSLoc Loc = Import(C.getLocation());
+  if (!Loc)
+    return Loc.takeError();
+  auto Var = Import(C.getCapturedVar());
+  if (!Var)
+    return Var.takeError();
+  return CapturedStmt::Capture(*Loc, C.getCaptureKind(), cast<VarDecl>(*Var));
 }
 
 llvm::Expected<OMPClause *> ASTImporter::Import(const OMPClause *OMPC) {
