@@ -481,6 +481,8 @@ class TypeSourceInfo;
     /// error.
     llvm::Expected<APValue> Import(const APValue &FromValue);
 
+    llvm::Expected<OMPClause *> Import(const OMPClause *OMPC);
+
     /// Import the definition of the given declaration, including all of
     /// the declarations it contains.
     [[nodiscard]] llvm::Error ImportDefinition(Decl *From);

@@ -45,6 +45,7 @@
 
 namespace clang {
 
+class ASTImporter;
 class ASTContext;
 
 //===----------------------------------------------------------------------===//
@@ -53,6 +54,7 @@ class ASTContext;
 
 /// This is a basic class for representing single OpenMP clause.
 class OMPClause {
+  friend class ASTImporter;
   /// Starting location of the clause (the clause keyword).
   SourceLocation StartLoc;
 

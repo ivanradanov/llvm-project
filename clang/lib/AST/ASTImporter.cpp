@@ -34,10 +34,12 @@
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/LambdaCapture.h"
 #include "clang/AST/NestedNameSpecifier.h"
+#include "clang/AST/OpenMPClause.h"
 #include "clang/AST/OperationKinds.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
 #include "clang/AST/StmtObjC.h"
+#include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/TemplateName.h"
@@ -680,6 +682,7 @@ namespace clang {
     ExpectedStmt VisitTypeTraitExpr(TypeTraitExpr *E);
     ExpectedStmt VisitCXXTypeidExpr(CXXTypeidExpr *E);
     ExpectedStmt VisitCXXFoldExpr(CXXFoldExpr *E);
+    ExpectedStmt VisitOMPParallelForDirective(OMPParallelForDirective *D);
 
     // Helper for chaining together multiple imports. If an error is detected,
     // subsequent imports will return default constructed nodes, so that failure
@@ -9011,6 +9014,34 @@ ExpectedStmt ASTNodeImporter::VisitCXXFoldExpr(CXXFoldExpr *E) {
                   ToEllipsisLoc, ToRHS, ToRParenLoc, E->getNumExpansions());
 }
 
+ExpectedStmt
+ASTNodeImporter::VisitOMPParallelForDirective(OMPParallelForDirective *D) {
+  Error Err = Error::success();
+
+  D->getBody();
+
+  SourceLocation StartLoc = importChecked(Err, D->getBeginLoc());
+  SourceLocation EndLoc = importChecked(Err, D->getEndLoc());
+  SmallVector<OMPClause *> Clauses;
+  Stmt *AssociatedStmt = importChecked(Err, D->getAssociatedStmt());
+  Expr *TaskRedRef = importChecked(Err, D->getTaskReductionRefExpr());
+
+  if (Err)
+    return std::move(Err);
+
+  Err = ImportContainerChecked(D->clauses(), Clauses);
+
+  if (Err)
+    return std::move(Err);
+
+  // TODO
+  OMPLoopBasedDirective::HelperExprs HEs;
+
+  return OMPParallelForDirective::Create(
+      Importer.getToContext(), StartLoc, EndLoc, D->getLoopsNumber(), Clauses,
+      AssociatedStmt, HEs, TaskRedRef, D->hasCancel());
+}
+
 Error ASTNodeImporter::ImportOverriddenMethods(CXXMethodDecl *ToMethod,
                                                CXXMethodDecl *FromMethod) {
   Error ImportErrors = Error::success();
@@ -10187,6 +10218,16 @@ ASTImporter::Import(const CXXBaseSpecifier *BaseSpec) {
 llvm::Expected<APValue> ASTImporter::Import(const APValue &FromValue) {
   ASTNodeImporter Importer(*this);
   return Importer.ImportAPValue(FromValue);
+}
+
+llvm::Expected<OMPClause *> ASTImporter::Import(const OMPClause *OMPC) {
+  ExpectedSLoc StartLoc = Import(OMPC->getBeginLoc());
+  if (!StartLoc)
+    return StartLoc.takeError();
+  ExpectedSLoc EndLoc = Import(OMPC->getEndLoc());
+  if (!EndLoc)
+    return EndLoc.takeError();
+  return new (ToContext) OMPClause(OMPC->getClauseKind(), *StartLoc, *EndLoc);
 }
 
 Error ASTImporter::ImportDefinition(Decl *From) {
