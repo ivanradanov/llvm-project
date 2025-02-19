@@ -813,6 +813,8 @@ AddExternalSource(CIAndOrigins &CI,
     Sources.emplace_back(Import.getASTContext(), Import.getFileManager(),
                          Import.getOriginMap());
   auto ES = std::make_unique<ExternalASTMerger>(Target, Sources);
+  // FIXME want to try to rename
+  ES->setODRHandling(ASTImporter::ODRHandlingType::Liberal);
   ExternalASTMerger *ESPtr = ES.get();
   INPUTGEN_DEBUG(ES->SetLogStream(llvm::dbgs()));
   CI.getASTContext().setExternalSource(ES.release());

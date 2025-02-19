@@ -416,6 +416,12 @@ void ExternalASTMerger::AddSources(llvm::ArrayRef<ImporterSource> Sources) {
   }
 }
 
+void ExternalASTMerger::setODRHandling(ASTImporter::ODRHandlingType Type) {
+  for (auto &Importer : Importers) {
+    Importer->setODRHandling(Type);
+  }
+}
+
 void ExternalASTMerger::RemoveSources(llvm::ArrayRef<ImporterSource> Sources) {
   if (LoggingEnabled())
     for (const ImporterSource &S : Sources)

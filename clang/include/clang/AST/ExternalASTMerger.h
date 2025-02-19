@@ -130,6 +130,8 @@ public:
   /// Ensures that Importers does not gain duplicate entries as a result.
   void AddSources(llvm::ArrayRef<ImporterSource> Sources);
 
+  void setODRHandling(ASTImporter::ODRHandlingType Type);
+
   /// Remove a set of ASTContexts as possible origins.
   ///
   /// Sometimes an origin goes away (for example, if a source file gets
