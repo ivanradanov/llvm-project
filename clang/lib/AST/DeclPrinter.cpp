@@ -20,6 +20,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "llvm/Support/raw_ostream.h"
@@ -33,6 +34,7 @@ namespace {
     unsigned Indentation;
     bool PrintInstantiation;
     std::function<bool(const Decl *)> *Filter;
+    bool PrintAnonymous = false;
 
     raw_ostream& Indent() { return Indent(Indentation); }
     raw_ostream& Indent(unsigned Indentation);
@@ -561,8 +563,24 @@ void DeclPrinter::VisitTypedefDecl(TypedefDecl *D) {
     if (D->isModulePrivate())
       Out << "__module_private__ ";
   }
+  bool TypePrinted = false;
   QualType Ty = D->getTypeSourceInfo()->getType();
-  Ty.print(Out, Policy, D->getName(), Indentation);
+  if (const ElaboratedType *ElT = dyn_cast<ElaboratedType>(Ty.getTypePtr())) {
+    if (const EnumType *ET = dyn_cast<EnumType>(ElT->getNamedType())) {
+      EnumDecl *ED = ET->getDecl();
+      if (ED->getDeclName().isEmpty()) {
+        TypePrinted = true;
+        PrintAnonymous = true;
+        VisitEnumDecl(ED);
+        PrintAnonymous = false;
+      }
+    }
+  }
+
+  if (!TypePrinted)
+    Ty.print(Out, Policy, D->getName(), Indentation);
+  else
+    Out << " " << D->getName();
   prettyPrintAttributes(D);
 }
 
@@ -573,6 +591,8 @@ void DeclPrinter::VisitTypeAliasDecl(TypeAliasDecl *D) {
 }
 
 void DeclPrinter::VisitEnumDecl(EnumDecl *D) {
+  if (!PrintAnonymous && D->getDeclName().isEmpty())
+    return;
   if (!Policy.SuppressSpecifiers && D->isModulePrivate())
     Out << "__module_private__ ";
   Out << "enum";
