@@ -48,6 +48,7 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Option/OptTable.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Signals.h"
@@ -61,6 +62,10 @@ using namespace clang::tooling;
 
 static llvm::cl::OptionCategory
     InputGenMinimizeCat("inputgen-minimize options");
+
+static llvm::cl::opt<std::string> Lang("l", llvm::cl::init("c++"),
+                                       llvm::cl::desc("Language"),
+                                       llvm::cl::cat(InputGenMinimizeCat));
 
 namespace {
 using namespace clang;
@@ -719,7 +724,7 @@ std::unique_ptr<CompilerInstance> BuildCompilerInstance() {
                  [](const std::string &s) -> const char * { return s.data(); });
   CompilerInvocation::CreateFromArgs(*Inv, ClangArgv, Ins->getDiagnostics());
 
-  std::string Input = "c++";
+  std::string Input = Lang;
   {
     using namespace driver::types;
     ID Id = lookupTypeForTypeSpecifier(Input.c_str());
@@ -838,7 +843,7 @@ llvm::Error ParseSource(const std::string &Path, CompilerInstance &CI,
 
 llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
                                    llvm::MutableArrayRef<CIAndOrigins> Imports,
-                                   raw_ostream *Out) {
+                                   raw_ostream *Out, bool DumpAst) {
   CIAndOrigins CI{init_convenience::BuildCompilerInstance()};
   auto ST = std::make_unique<SelectorTable>();
   auto BC = std::make_unique<Builtin::Context>();
@@ -853,9 +858,12 @@ llvm::Expected<CIAndOrigins> Parse(const std::string &Path,
 
   if (Out) {
     ASTConsumers.push_back(std::make_unique<ContextSplitter>());
-    if (EAM) {
+    if (EAM)
       ASTConsumers.push_back(std::make_unique<ReorderDecls>(*EAM));
-    }
+    if (DumpAst)
+      ASTConsumers.push_back(
+          CreateASTDumper(nullptr, "", true, false, false, false,
+                          ASTDumpOutputFormat::ADOF_Default));
     ASTConsumers.push_back(CreateASTPrinter(nullptr, ""));
   }
 
@@ -1076,7 +1084,7 @@ int main(int argc, const char **argv) {
   int FD;
   SmallString<128> Filename;
   if (std::error_code EC = llvm::sys::fs::createTemporaryFile(
-          "entry-temp", "cpp", FD, Filename)) {
+          "entry-temp", Lang == "c++" ? "cpp" : "c", FD, Filename)) {
     llvm::errs() << "Error: " << EC.message() << "\n";
     return 1;
   }
@@ -1085,8 +1093,12 @@ int main(int argc, const char **argv) {
   O << MinimizeFactory.getGeneratedEntry();
   O.close();
 
+  if (getenv("INPUTGEN_MINIMIZE_DUMP_ENTRY"))
+    llvm::errs() << MinimizeFactory.getGeneratedEntry();
+
   llvm::Expected<CIAndOrigins> ExpressionCI =
-      Parse(Filename.c_str(), ImportCIs, &llvm::outs());
+      Parse(Filename.c_str(), ImportCIs, &llvm::outs(),
+            getenv("INPUTGEN_MINIMIZE_DUMP_AST"));
   if (auto E = ExpressionCI.takeError()) {
     llvm::errs() << "error: " << llvm::toString(std::move(E)) << "\n";
     exit(-1);
