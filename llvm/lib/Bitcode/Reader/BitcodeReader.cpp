@@ -2248,6 +2248,8 @@ static Attribute::AttrKind getAttrFromCode(uint64_t Code) {
     return Attribute::CoroElideSafe;
   case bitc::ATTR_KIND_NO_EXT:
     return Attribute::NoExt;
+  case bitc::ATTR_KIND_INPUT_GEN_ENTRY:
+    return Attribute::InputGenEntry;
   }
 }
 
