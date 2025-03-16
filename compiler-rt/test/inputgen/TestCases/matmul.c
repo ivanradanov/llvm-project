@@ -1,12 +1,14 @@
-// RUN: %clangxx_inputgen_gen -c %s -o %t.gen.o
-// RUN: %clangxx_inputgen_replay_gen -c %s -o %t.repl.o
-// XFAIL: *
+// RUN: %clangxx_inputgen_full_gen
+// RUN: %clangxx_inputgen_full_replay_gen
+//
+// RUN: %t.gen.exe
+// RUN: %t.replay_gen.exe
+//
 
 #include <stdio.h>
 
 __attribute__((inputgen_entry)) void matmul(double *a, double *b, double *m,
                                             int n) {
-
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < n; ++j) {
       double t = 0.0;
