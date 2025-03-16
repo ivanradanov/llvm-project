@@ -1,11 +1,10 @@
 // RUN: %clangxx_inputgen_full_gen
 // RUN: %clangxx_inputgen_full_replay_gen
-//
-// RUN: %t.gen.exe
-// RUN: %t.replay_gen.exe
-//
 
-#include <stdio.h>
+// RUN: %inputgen_gen
+// RUN: for i in %inputgen_gen.*.inp; do %inputgen_repl_gen "$i"; done
+
+extern int printf(const char *__restrict __format, ...);
 
 __attribute__((inputgen_entry)) void matmul(double *a, double *b, double *m,
                                             int n) {

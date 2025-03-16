@@ -1,8 +1,8 @@
 // RUN: %clangxx_inputgen_full_gen
 // RUN: %clangxx_inputgen_full_replay_gen
 
-// RUN: %t.repl.exe 2>&1 | FileCheck %s --check-prefix=REPL
-// RUN: %t.gen.exe -1  2>&1 | FileCheck %s --check-prefix=GEN
+// RUN: %inputgen_repl_gen 2>&1 | FileCheck %s --check-prefix=REPL
+// RUN: %inputgen_gen -1  2>&1 | FileCheck %s --check-prefix=GEN
 
 // REPL:   Num available functions: 2
 // REPL:   Available functions:
