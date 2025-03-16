@@ -28,11 +28,12 @@
 #include "vm_values.h"
 
 namespace __ig {
-using BucketScheme12Ty = BucketSchemeTy</*EncodingNo=*/1,
-                                        /*OffsetBits=*/12, /*BucketBits=*/3,
-                                        /*RealPtrBits=*/32>;
-using TableScheme20Ty = TableSchemeTy<2, 30>;
-using BigObjScheme10Ty = BigObjSchemeTy</*EncodingNo=*/3, /*ObjectBits=*/10>;
+
+using UserObjSmallScheme = BucketSchemeTy</*EncodingNo=*/1,
+                                          /*OffsetBits=*/12, /*BucketBits=*/3,
+                                          /*RealPtrBits=*/32>;
+using RTObjScheme = TableSchemeTy<2, 30>;
+using UserObjLargeScheme = BigObjSchemeTy</*EncodingNo=*/3, /*ObjectBits=*/10>;
 
 struct ObjectManager {
   ~ObjectManager();
@@ -44,9 +45,9 @@ struct ObjectManager {
   }
 
   ChoiceTrace *CT = nullptr;
-  BigObjScheme10Ty UserObjLarge;
-  BucketScheme12Ty UserObjSmall;
-  TableScheme20Ty RTObjs;
+  UserObjLargeScheme UserObjLarge;
+  UserObjSmallScheme UserObjSmall;
+  RTObjScheme RTObjs;
 
   std::string ProgramName;
 
@@ -67,7 +68,7 @@ struct ObjectManager {
   void reset();
 
   void *getObj(uint32_t Seed);
-  char *encode(char *Ptr, uint32_t Size) {
+  char *encodeUserObj(char *Ptr, uint32_t Size) {
     if (Size < (1 << 10))
       return UserObjSmall.encode(Ptr, Size);
     return UserObjLarge.encode(Ptr, Size);
@@ -82,6 +83,7 @@ struct ObjectManager {
     case 3:
       return UserObjLarge.decode(VPtr);
     default:
+      // TODO should we error here?
       return VPtr;
     }
   }
@@ -101,10 +103,6 @@ struct ObjectManager {
     case 3:
       return UserObjLarge.access(VPtr, AccessSize, TypeId, AK == WRITE);
     default:
-      WARN("unknown encoding {} (allowed until global support)\n",
-           getEncoding(VPtr));
-      // TODO: Workaround until global supported.
-      return VPtr;
       ERR("unknown encoding {}\n", getEncoding(VPtr));
       error(1003);
       std::terminate();
@@ -124,9 +122,11 @@ struct ObjectManager {
     }
   }
 
-  char *add(char *Addr, int32_t Size, uint32_t Seed) {
-    return RTObjs.create(Size, Seed);
+  char *addBacked(char *Addr, int32_t Size) {
+    return RTObjs.createBacked(Addr, Size, /* TODO */ 0);
   }
+
+  char *add(int32_t Size, uint32_t Seed) { return RTObjs.create(Size, Seed); }
 
   std::pair<int32_t, int32_t> getPtrInfo(char *VPtr, bool AllowToFail) {
     switch (getEncoding(VPtr)) {

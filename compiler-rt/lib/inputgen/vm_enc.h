@@ -114,6 +114,8 @@ struct BucketSchemeTy : public EncodingSchemeTy {
 #endif
   }
 
+  static constexpr uint32_t ThisEncodingNo = EncodingNo;
+
   static constexpr uint32_t NumOffsetBits = OffsetBits;
   static constexpr uint32_t NumBucketBits = BucketBits;
   static constexpr uint32_t NumRealPtrBits = RealPtrBits;
@@ -353,11 +355,13 @@ struct TableSchemeBaseTy : public EncodingSchemeTy {
     bool AnyAccess = false;
     bool IsNull = false;
     bool AnyPtrRead = false;
+    bool FixedSize = false;
     char *SavedValues = nullptr;
 
-    TableEntryTy(char *Base, uint32_t PositiveSize, uint32_t NegativeSize)
+    TableEntryTy(char *Base, uint32_t PositiveSize, uint32_t NegativeSize,
+                 bool FixedSize)
         : Base(Base), Shadow(Base + PositiveSize + NegativeSize),
-          NegativeSize(NegativeSize) {}
+          NegativeSize(NegativeSize), FixedSize(FixedSize) {}
     char *getBase() const { return Base; }
     char *getShadow() const { return Shadow; }
     uint32_t getShadowSize() const { return (getSize() + 1) / 2; }
@@ -366,6 +370,11 @@ struct TableSchemeBaseTy : public EncodingSchemeTy {
     uint32_t getNegativeSize() const { return NegativeSize; }
 
     void grow(uint32_t NewPositiveSize, uint32_t NewNegativeSize) {
+      if (FixedSize) {
+        fprintf(stderr, "Out of bound detected: %p; UB!\n", Base);
+        error(1003);
+        std::terminate();
+      }
       uint32_t OldSize = getSize();
       uint32_t NewSize = NewPositiveSize + NewNegativeSize;
       uint32_t NegativeDifference = NewNegativeSize - getNegativeSize();
@@ -467,6 +476,16 @@ struct TableSchemeTy : public TableSchemeBaseTy {
     }
   }
 
+  char *createBacked(char *Addr, uint32_t Size, uint32_t Seed) {
+    assert(std::has_single_bit(Size));
+    auto TEC = TableEntryCnt++;
+    uint32_t NegativeSize = 0;
+    uint32_t PositiveSize = Size;
+    Table[TEC] = TableEntryTy(Addr, PositiveSize, NegativeSize, true);
+    EncDecTy ED(DefaultOffset, TEC);
+    return ED.VPtr;
+  }
+
   char *create(uint32_t Size, uint32_t Seed) {
     assert(std::has_single_bit(Size));
     auto TEC = TableEntryCnt++;
@@ -474,7 +493,7 @@ struct TableSchemeTy : public TableSchemeBaseTy {
     uint32_t PositiveSize = Size * 8;
     uint32_t TotalSize = PositiveSize + PositiveSize / 2;
     char *Base = (char *)calloc(TotalSize, 1);
-    Table[TEC] = TableEntryTy(Base, PositiveSize, NegativeSize);
+    Table[TEC] = TableEntryTy(Base, PositiveSize, NegativeSize, false);
     EncDecTy ED(DefaultOffset, TEC);
     return ED.VPtr;
   }

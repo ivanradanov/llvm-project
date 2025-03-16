@@ -61,27 +61,21 @@ extern ObjectManager ThreadOM;
 extern "C" {
 
 IG_API_ATTRS
-char *__ig_pre_global(char *address, char *name, int64_t initial_value,
-                       int32_t initial_value_size, int8_t is_constant) {
-  PRINTF("global pre -- address: %p, name: %s, initial_value: %lli, "
-         "initial_value_size: %i, is_constant: %i\n",
-         address, name, initial_value, initial_value_size, is_constant);
-  __builtin_memcpy(address, &initial_value, initial_value_size);
-  auto *P = ThreadOM.encode(address, initial_value_size);
-  return P;
+char *__ig_pre_global_ind(char *address, char *name, char *initial_value_ptr,
+                          int32_t initial_value_size, int8_t is_constant) {
+  if (is_constant)
+    return ThreadOM.encodeUserObj(address, initial_value_size);
+  return ThreadOM.addBacked(address, initial_value_size);
 }
 
 IG_API_ATTRS
-char *__ig_pre_global_ind(char *address, char *name,
-                           int64_t *initial_value_ptr,
-                           int32_t initial_value_size, int8_t is_constant) {
-  PRINTF("global pre -- address: %p, name: %s, initial_value: %p, "
+char *__ig_pre_global(char *address, char *name, int64_t initial_value,
+                      int32_t initial_value_size, int8_t is_constant) {
+  PRINTF("global pre -- address: %p, name: %s, initial_value: %lli, "
          "initial_value_size: %i, is_constant: %i\n",
-         address, name, (void *)initial_value_ptr, initial_value_size,
-         is_constant);
-  __builtin_memcpy(address, initial_value_ptr, initial_value_size);
-  auto *P = ThreadOM.encode(address, initial_value_size);
-  return P;
+         address, name, initial_value, initial_value_size, is_constant);
+  return __ig_pre_global_ind(address, name, (char *)&initial_value,
+                             initial_value_size, is_constant);
 }
 
 IG_API_ATTRS
@@ -214,7 +208,7 @@ int64_t __ig_post_call(char *callee, char *callee_name, int64_t intrinsic_id,
       }
       parameters += sizeof(ParameterValuePackTy) + VP->Size + Padding;
     }
-    char *VPtr = ThreadOM.encode((char *)return_value, Size);
+    char *VPtr = ThreadOM.encodeUserObj((char *)return_value, Size);
     PRINTF("allocation (%s) %p -> %p [%i]\n", callee_name, (void *)return_value,
            VPtr, Size);
     return (uint64_t)VPtr;
@@ -226,7 +220,7 @@ IG_API_ATTRS
 char *__ig_post_alloca(char *address, int64_t size, int64_t alignment) {
   PRINTF("alloca post -- address: %p, size: %lli, alignment: %lli\n", address,
          size, alignment);
-  char *VPtr = ThreadOM.encode(address, size);
+  char *VPtr = ThreadOM.encodeUserObj(address, size);
   PRINTF("--> %p\n", VPtr);
   return VPtr;
 }
