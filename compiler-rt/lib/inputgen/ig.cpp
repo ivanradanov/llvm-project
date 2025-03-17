@@ -230,7 +230,9 @@ char *__ig_post_base_pointer_info(char *base_pointer,
                                   int32_t base_pointer_kind) {
   PRINTF("base_pointer_info post -- base_pointer: %p, base_pointer_kind: %i\n",
          base_pointer, base_pointer_kind);
-  return ThreadOM.getBasePtrInfo(base_pointer);
+  char *BPI = ThreadOM.getBasePtrInfo(base_pointer);
+  PRINTF("base_pointer_info --> %p\n", BPI);
+  return BPI;
 }
 
 IG_API_ATTRS
@@ -490,7 +492,7 @@ int __ig_known___sprintf_chk(char *s, int flags, size_t slen,
 IG_API_ATTRS
 void __ig_gen_value(void *pointer, int32_t value_size, int64_t alignment,
                     int32_t value_type_id) {
-  PRINTF("load pre -- pointer: %p, value_size: %i, alignment: %lli, "
+  PRINTF("gen value -- pointer: %p, value_size: %i, alignment: %lli, "
          "value_type_id: %i\n",
          pointer, value_size, alignment, value_type_id);
   memset(pointer, 0, value_size);
