@@ -493,6 +493,7 @@ bool BranchConditionIO::analyzeBranch(BranchInst &BI,
     auto *I = cast<Instruction>(V);
     auto *CloneI = I->clone();
     CloneI->insertInto(ComputeBB, ComputeBB->begin());
+    CloneI->setMetadata(LLVMContext::MD_dbg, nullptr);
     if (auto *CI = dyn_cast<CallInst>(CloneI))
       if (auto *Callee = CI->getCalledFunction())
         if (Callee->getName().starts_with(IConf.getRTName()))
