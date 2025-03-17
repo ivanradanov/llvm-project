@@ -1247,8 +1247,12 @@ InputGenInstrumentationConfig::InputGenInstrumentationConfig(
 void InputGenInstrumentationConfig::populate(InstrumentorIRBuilderTy &IIRB) {
   UnreachableIO::ConfigTy UIOConfig(/*Enable=*/false);
   UnreachableIO::populate(*this, IIRB.Ctx, &UIOConfig);
+
   BasePointerIO::ConfigTy BPIOConfig(/*Enable=*/false);
+  BPIOConfig.set(BasePointerIO::PassPointer);
+  BPIOConfig.set(BasePointerIO::PassPointerKind);
   BasePointerIO::populate(*this, IIRB.Ctx, &BPIOConfig);
+
   LoopValueRangeIO::ConfigTy LVRIOConfig(/*Enable=*/false);
   LoopValueRangeIO::populate(*this, IIRB, &LVRIOConfig);
 
