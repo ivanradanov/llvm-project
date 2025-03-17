@@ -936,11 +936,10 @@ bool InputGenMemoryImpl::handleIndirectCalleeCandidates() {
   SmallSetVector<Function *, 16> IndirectCalleeCandidates;
   if (GlobalVariable *GV =
       M.getGlobalVariable(InputGenIndirectCalleeCandidateGlobalName)) {
-    if (GV->hasInitializer()) {
-      auto *CA = cast<ConstantArray>(GV->getInitializer());
-      for (Use &Op : CA->operands())
-        IndirectCalleeCandidates.insert(cast<Function>(Op));
-    }
+    if (GV->hasInitializer())
+      if (auto *CA = dyn_cast<ConstantArray>(GV->getInitializer()))
+        for (Use &Op : CA->operands())
+          IndirectCalleeCandidates.insert(cast<Function>(Op));
     assert(GV->use_empty());
     GV->eraseFromParent();
     Changed = true;
