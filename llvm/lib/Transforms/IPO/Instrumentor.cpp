@@ -353,6 +353,11 @@ public:
       return;
     auto &Out = *OutPtr;
 
+    if (!IConf.AddToGlobalCtor->getBool())
+      Out << "void " << getCtorName() << "();\n\n";
+    if (!IConf.AddToGlobalDtor->getBool())
+      Out << "void " << getCtorName() << "();\n\n";
+
     for (auto &ChoiceMap : IConf.IChoices) {
       for (auto &[_, IO] : ChoiceMap) {
         if (!IO->Enabled)
@@ -412,6 +417,9 @@ private:
     }
     return Changed;
   }
+
+  std::string getCtorName();
+  std::string getDtorName();
 
   template <typename MemoryInstTy> bool analyzeAccess(MemoryInstTy &I);
 
@@ -571,6 +579,14 @@ bool InstrumentorImpl::instrumentFunction(Function &Fn) {
   return Changed;
 }
 
+std::string InstrumentorImpl::getCtorName() {
+  return IConf.getRTName("ctor", "");
+}
+
+std::string InstrumentorImpl::getDtorName() {
+  return IConf.getRTName("ctor", "");
+}
+
 bool InstrumentorImpl::instrumentModule() {
   SmallVector<GlobalVariable *> Globals;
   Globals.reserve(M.global_size());
@@ -584,25 +600,35 @@ bool InstrumentorImpl::instrumentModule() {
   }
 
   auto CreateYtor = [&](bool Ctor) {
-    Function *YtorFn = Function::Create(
-        FunctionType::get(IIRB.VoidTy, false), GlobalValue::PrivateLinkage,
-        IConf.getRTName(Ctor ? "ctor" : "dtor", ""), M);
+    bool AddToGlobal;
+    if (Ctor)
+      AddToGlobal = IConf.AddToGlobalCtor->getBool();
+    else
+      AddToGlobal = IConf.AddToGlobalDtor->getBool();
+    GlobalValue::LinkageTypes Linkage;
+    if (AddToGlobal)
+      Linkage = GlobalValue::PrivateLinkage;
+    else
+      Linkage = GlobalValue::ExternalLinkage;
+
+    Function *YtorFn =
+        Function::Create(FunctionType::get(IIRB.VoidTy, false), Linkage,
+                         Ctor ? getCtorName() : getDtorName(), M);
 
     auto *EntryBB = BasicBlock::Create(IIRB.Ctx, "entry", YtorFn);
     IIRB.IRB.SetInsertPoint(EntryBB, EntryBB->begin());
     ensureDbgLoc(IIRB.IRB);
     IIRB.IRB.CreateRetVoid();
 
-    if (Ctor)
+    if (Ctor && IConf.AddToGlobalCtor->getBool())
       appendToGlobalCtors(M, YtorFn, 0);
-    else
+    if (!Ctor && IConf.AddToGlobalDtor->getBool())
       appendToGlobalDtors(M, YtorFn, 0);
     return YtorFn;
   };
+  Function *CtorFn = CreateYtor(true), *DtorFn = CreateYtor(false);
 
   InstrumentationCaches ICaches;
-
-  Function *CtorFn = nullptr, *DtorFn = nullptr;
   bool Changed = false;
   for (auto Loc : {InstrumentationLocation::MODULE_PRE,
                    InstrumentationLocation::MODULE_POST}) {
@@ -612,8 +638,6 @@ bool InstrumentorImpl::instrumentModule() {
       auto *IO = ChoiceIt.second;
       if (!IO->Enabled)
         continue;
-      if (!YtorFn)
-        YtorFn = CreateYtor(IsPRE);
       IIRB.IRB.SetInsertPointPastAllocas(YtorFn);
       ensureDbgLoc(IIRB.IRB);
       Value *YtorPtr = YtorFn;
@@ -634,8 +658,6 @@ bool InstrumentorImpl::instrumentModule() {
       auto *IO = ChoiceIt.second;
       if (!IO->Enabled)
         continue;
-      if (!YtorFn)
-        YtorFn = CreateYtor(IsPRE);
       for (GlobalVariable *GV : Globals) {
         if (!shouldInstrumentGlobalVariable(*GV))
           continue;
