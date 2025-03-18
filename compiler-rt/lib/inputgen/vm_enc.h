@@ -357,11 +357,13 @@ struct TableSchemeBaseTy : public EncodingSchemeTy {
     bool AnyPtrRead = false;
     bool FixedSize = false;
     char *SavedValues = nullptr;
+    char *GlobalName = nullptr;
 
     TableEntryTy(char *Base, uint32_t PositiveSize, uint32_t NegativeSize,
-                 bool FixedSize)
+                 bool FixedSize, char *GlobalName)
         : Base(Base), Shadow(Base + PositiveSize + NegativeSize),
-          NegativeSize(NegativeSize), FixedSize(FixedSize) {}
+          NegativeSize(NegativeSize), FixedSize(FixedSize),
+          GlobalName(GlobalName) {}
     char *getBase() const { return Base; }
     char *getShadow() const { return Shadow; }
     uint32_t getShadowSize() const { return (getSize() + 1) / 2; }
@@ -476,11 +478,11 @@ struct TableSchemeTy : public TableSchemeBaseTy {
     }
   }
 
-  char *createBacked(char *Addr, uint32_t Size, uint32_t Seed) {
+  char *createGlobal(char *Addr, char *Name, uint32_t Size, uint32_t Seed) {
     auto TEC = TableEntryCnt++;
     uint32_t NegativeSize = 0;
     uint32_t PositiveSize = Size;
-    Table[TEC] = TableEntryTy(Addr, PositiveSize, NegativeSize, true);
+    Table[TEC] = TableEntryTy(Addr, PositiveSize, NegativeSize, true, Name);
     EncDecTy ED(DefaultOffset, TEC);
     return ED.VPtr;
   }
@@ -492,7 +494,7 @@ struct TableSchemeTy : public TableSchemeBaseTy {
     uint32_t PositiveSize = Size * 8;
     uint32_t TotalSize = PositiveSize + PositiveSize / 2;
     char *Base = (char *)calloc(TotalSize, 1);
-    Table[TEC] = TableEntryTy(Base, PositiveSize, NegativeSize, false);
+    Table[TEC] = TableEntryTy(Base, PositiveSize, NegativeSize, false, nullptr);
     EncDecTy ED(DefaultOffset, TEC);
     return ED.VPtr;
   }

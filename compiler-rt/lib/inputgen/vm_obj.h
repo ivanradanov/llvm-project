@@ -22,40 +22,13 @@
 #include <type_traits>
 #include <unordered_set>
 
+#include "defer.h"
 #include "logging.h"
 #include "vm_choices.h"
 #include "vm_enc.h"
 #include "vm_values.h"
 
 namespace __ig {
-
-template <class T, bool &Init> class Defer {
-public:
-  Defer() {}
-  ~Defer() {
-    if (Init) {
-      fputs("DEINITIALIZING OM\n", stderr);
-      V.~T();
-    }
-  }
-  template <typename... ArgsTy> void init(ArgsTy &&...Args) {
-    if (!Init) {
-      // We cannot use c++ things here because we may have not run global
-      // constructors yet
-      fputs("INITIALIZING OM\n", stderr);
-      new (&V) T(std::forward<ArgsTy>(Args)...);
-      Init = true;
-    }
-  }
-  T *operator->() {
-    assert(Init);
-    return &V; }
-
-private:
-  union {
-    T V;
-  };
-};
 
 using UserObjSmallScheme = BucketSchemeTy</*EncodingNo=*/1,
                                           /*OffsetBits=*/12, /*BucketBits=*/3,
@@ -150,8 +123,8 @@ struct ObjectManager {
     }
   }
 
-  char *addBacked(char *Addr, int32_t Size) {
-    return RTObjs.createBacked(Addr, Size, /* TODO */ 0);
+  char *addGlobal(char *Addr, char *Name, int32_t Size) {
+    return RTObjs.createGlobal(Addr, Name, Size, /* TODO */ 0);
   }
 
   char *add(int32_t Size, uint32_t Seed) { return RTObjs.create(Size, Seed); }

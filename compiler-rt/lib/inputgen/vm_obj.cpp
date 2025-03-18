@@ -31,7 +31,7 @@ void ObjectManager::saveInput(uint32_t EntryNo, uint32_t InputIdx,
   }
 #endif
 
-  StorageManager SM;
+  storage::StorageManager SM;
 
   for (uint32_t I = 0, E = RTObjs.TableEntryCnt; I != E; ++I) {
     SM.encode(*this, I, RTObjs.Table[I]);

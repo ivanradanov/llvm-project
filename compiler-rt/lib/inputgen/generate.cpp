@@ -1,22 +1,18 @@
 #include "common.h"
+#include "defer.h"
+#include "logging.h"
 #include "timer.h"
 #include "vm_choices.h"
 #include "vm_obj.h"
-#include "logging.h"
 
 #include <bit>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <stdio.h>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <condition_variable>
-
-extern "C" uint32_t __ig_num_entry_points;
-extern "C" void __ig_entry(uint32_t, void *);
-
-using namespace __ig;
 
 // We are depending on this = false to be embedded as an initial value in the
 // global of the binary so that we have it set to false before we get the call
@@ -27,8 +23,12 @@ using namespace __ig;
 // In the current inputgen we assume we instrument for generation only a
 // single module so we should get exactly one call to init, so in theory we
 // don't need it.
-bool ThreadOMInit = false;
-Defer<ObjectManager, ThreadOMInit> ThreadOM;
+namespace __ig {
+bool GM = false;
+DeferGlobalConstruction<ObjectManager, GM> ThreadOM;
+} // namespace __ig
+
+using namespace __ig;
 
 struct SharedState {
   SharedState(uint32_t NumThreads, std::vector<uint32_t> &Seeds)
@@ -70,8 +70,8 @@ struct GenerationThread {
     auto *GT = new GenerationThread(*SS, I, E, EntryNo);
     auto *ChoiceTrace = SS->CM.initializeChoices(GT->ID);
     ThreadOM->init(ChoiceTrace, OutputName,
-                  std::bind(&GenerationThread::stopGeneration, GT,
-                            std::placeholders::_1));
+                   std::bind(&GenerationThread::stopGeneration, GT,
+                             std::placeholders::_1));
     GT->startGeneration();
   }
 
@@ -139,7 +139,7 @@ int main(int argc, char **argv) {
 
   if (static_cast<uint32_t>(EntryNo) >= __ig_num_entry_points) {
     ERR("Entry {} is out of bounds, {} available\n", EntryNo,
-            __ig_num_entry_points);
+        __ig_num_entry_points);
     exit(static_cast<int>(ExitStatus::EntryNoOutOfBounds));
   }
 
