@@ -29,11 +29,11 @@ inputgen_replay_lib_path = os.path.join(
             config.compiler_rt_libdir,
             "libinputgen.replay-x86_64.a")
 
-gen_args = '-mllvm --input-gen-mode=generate -flto -O2'.split(' ') + etc_args
-replay_gen_args = '-mllvm --input-gen-mode=replay_generated -flto -O2'.split(' ') + etc_args
+gen_args = '-g -mllvm --input-gen-allow-external-funcs=printf -mllvm --input-gen-mode=generate -flto -O2'.split(' ') + etc_args
+replay_gen_args = '-g -mllvm --input-gen-allow-external-funcs=printf -mllvm --input-gen-mode=replay_generated -flto -O2'.split(' ') + etc_args
 
-gen_args_link = f'-fuse-ld=lld -flto {inputgen_generate_lib_path} -lpthread -lstdc++ -O2'.split(' ') + etc_args
-replay_gen_args_link = f'-fuse-ld=lld -flto {inputgen_replay_lib_path} -lpthread -lstdc++ -O2'.split(' ') + etc_args
+gen_args_link = f'-g -fuse-ld=lld -flto {inputgen_generate_lib_path} -lpthread -lstdc++ -O2'.split(' ') + etc_args
+replay_gen_args_link = f'-g -fuse-ld=lld -flto {inputgen_replay_lib_path} -lpthread -lstdc++ -O2'.split(' ') + etc_args
 
 gen_args_full = 'rm -rf %t.gen.exe.*.inp && ' + cxx_build_invocation(gen_args) + ' -c %s -o %t.gen.o && ' + cxx_build_invocation(gen_args_link) + ' %t.gen.o -o %t.gen.exe'
 replay_gen_args_full = cxx_build_invocation(replay_gen_args) + ' -c %s -o %t.replay_gen.o && ' + cxx_build_invocation(replay_gen_args_link) + ' %t.replay_gen.o -o %t.replay_gen.exe'
