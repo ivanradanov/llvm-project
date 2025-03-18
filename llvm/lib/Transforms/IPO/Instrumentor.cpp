@@ -594,9 +594,9 @@ bool InstrumentorImpl::instrumentModule() {
     IIRB.IRB.CreateRetVoid();
 
     if (Ctor)
-      appendToGlobalCtors(M, YtorFn, 65536);
+      appendToGlobalCtors(M, YtorFn, 0);
     else
-      appendToGlobalDtors(M, YtorFn, 65536);
+      appendToGlobalDtors(M, YtorFn, 0);
     return YtorFn;
   };
 
