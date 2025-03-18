@@ -63,6 +63,7 @@ extern "C" {
 IG_API_ATTRS
 char *__ig_pre_global_ind(char *address, char *name, char *initial_value_ptr,
                           int32_t initial_value_size, int8_t is_constant) {
+  GlobalsStorage.add({address, name, initial_value_size, is_constant});
   if (is_constant)
     return ThreadOM.encodeUserObj(address, initial_value_size);
   return ThreadOM.addBacked(address, initial_value_size);

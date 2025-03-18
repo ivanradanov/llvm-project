@@ -477,7 +477,6 @@ struct TableSchemeTy : public TableSchemeBaseTy {
   }
 
   char *createBacked(char *Addr, uint32_t Size, uint32_t Seed) {
-    assert(std::has_single_bit(Size));
     auto TEC = TableEntryCnt++;
     uint32_t NegativeSize = 0;
     uint32_t PositiveSize = Size;

@@ -29,6 +29,16 @@
 
 namespace __ig {
 
+struct GlobalsStorageTy {
+  class Global {
+    char *address, name, initial_value_ptr;
+    int32_t initial_value_size;
+    int8_t is_constant;
+  };
+  std::vector<Global> globals;
+  GlobalsStorageTy() {}
+} GlobalsStorage;
+
 using UserObjSmallScheme = BucketSchemeTy</*EncodingNo=*/1,
                                           /*OffsetBits=*/12, /*BucketBits=*/3,
                                           /*RealPtrBits=*/32>;
