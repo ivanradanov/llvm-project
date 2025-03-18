@@ -478,13 +478,6 @@ struct InstrumentationConfig {
         *this, "gpu_enabled", "Instrument GPU targets", true);
     InlineRuntimeEagerly = BaseConfigurationOpportunity::getBoolOption(
         *this, "inline_runtime", "Inline Runtime Eagerly", true);
-    AddToGlobalCtor = BaseConfigurationOpportunity::getBoolOption(
-        *this, "add_to_global_ctor",
-        "Add module and global instrumentation to the global constructor",
-        true);
-    AddToGlobalDtor = BaseConfigurationOpportunity::getBoolOption(
-        *this, "add_to_global_dtor",
-        "Add module and global instrumentation to the global destructor", true);
   }
 
   bool ReadConfig = true;
@@ -509,8 +502,6 @@ struct InstrumentationConfig {
   BaseConfigurationOpportunity *HostEnabled;
   BaseConfigurationOpportunity *GPUEnabled;
   BaseConfigurationOpportunity *InlineRuntimeEagerly;
-  BaseConfigurationOpportunity *AddToGlobalCtor;
-  BaseConfigurationOpportunity *AddToGlobalDtor;
 
   EnumeratedArray<StringMap<InstrumentationOpportunity *>,
                   InstrumentationLocation::KindTy>
