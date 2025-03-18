@@ -29,15 +29,33 @@
 
 namespace __ig {
 
-struct GlobalsStorageTy {
-  class Global {
-    char *address, name, initial_value_ptr;
-    int32_t initial_value_size;
-    int8_t is_constant;
+template <class T, bool &Init> class Defer {
+public:
+  Defer() {}
+  ~Defer() {
+    if (Init) {
+      fputs("DEINITIALIZING OM\n", stderr);
+      V.~T();
+    }
+  }
+  template <typename... ArgsTy> void init(ArgsTy &&...Args) {
+    if (!Init) {
+      // We cannot use c++ things here because we may have not run global
+      // constructors yet
+      fputs("INITIALIZING OM\n", stderr);
+      new (&V) T(std::forward<ArgsTy>(Args)...);
+      Init = true;
+    }
+  }
+  T *operator->() {
+    assert(Init);
+    return &V; }
+
+private:
+  union {
+    T V;
   };
-  std::vector<Global> globals;
-  GlobalsStorageTy() {}
-} GlobalsStorage;
+};
 
 using UserObjSmallScheme = BucketSchemeTy</*EncodingNo=*/1,
                                           /*OffsetBits=*/12, /*BucketBits=*/3,

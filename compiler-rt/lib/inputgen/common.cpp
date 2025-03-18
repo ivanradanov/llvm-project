@@ -5,8 +5,6 @@
 
 namespace __ig {
 
-struct GlobalsStorageTy GlobalsStorage;
-
 void printAvailableFunctions() {
   ERR("  Available functions:\n");
   for (uint32_t I = 0; I < __ig_num_entry_points; I++)

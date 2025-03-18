@@ -9,15 +9,15 @@
 
 extern "C" int printf(const char *__restrict __format, ...);
 
-__attribute__((inputgen_entry)) void matmul(double *a, double *b, double *m,
-                                            int n) {
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < n; ++j) {
-      double t = 0.0;
-      for (int k = 0; k < n; ++k)
-        t += a[i * n + k] * b[k * n + j];
-      m[i * n + j] = t;
-    }
-  }
-  printf("m[n/2] = m[%i] : %lf\n", n / 2, m[n / 2]);
+int global_int;
+extern int external_global_int;
+extern const int const_external_global_int;
+static int static_global_int = 42;
+
+__attribute__((inputgen_entry)) void foo(double *a, double *b, double *m,
+                                         int n) {
+    printf("GI %d\n", global_int);
+    printf("EGI %d\n", external_global_int);
+    printf("CEGI %d\n", const_external_global_int);
+    printf("SGI %d\n", static_global_int);
 }

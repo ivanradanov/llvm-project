@@ -1244,6 +1244,9 @@ InputGenInstrumentationConfig::InputGenInstrumentationConfig(
 }
 
 void InputGenInstrumentationConfig::populate(InstrumentorIRBuilderTy &IIRB) {
+
+  ModuleIO::populate(*this, IIRB.Ctx);
+
   UnreachableIO::ConfigTy UIOConfig(/*Enable=*/false);
   UnreachableIO::populate(*this, IIRB.Ctx, &UIOConfig);
 
