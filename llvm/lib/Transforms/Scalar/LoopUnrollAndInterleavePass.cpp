@@ -1739,6 +1739,7 @@ LoopUnrollResult LoopUnrollAndInterleave::tryToUnrollAndInterleaveLoop(
 
         if (StepInstOpr == (unsigned)-1) {
           Succeeded = false;
+          LLVM_DEBUG(DBGS_FAIL << "Could not find the step inst operand.\n");
           return;
         }
 
