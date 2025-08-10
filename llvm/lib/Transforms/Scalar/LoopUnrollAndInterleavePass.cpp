@@ -1040,7 +1040,7 @@ bool CallInterleave::tryToInterleave(
 
 static bool isConditional(Instruction *I) {
   // Curently only switch and branch terminators are supported.
-  if (auto *Sw = dyn_cast<SwitchInst>(I))
+  if (isa<SwitchInst>(I))
     return true;
   if (auto *BI = dyn_cast<BranchInst>(I))
     return BI->isConditional();
@@ -1795,7 +1795,7 @@ LoopUnrollResult LoopUnrollAndInterleave::tryToUnrollAndInterleaveLoop(
         switch (BO->getOpcode()) {
         case Instruction::Add:
         case Instruction::Sub:
-          if (auto *IncrementInst = dyn_cast<Instruction>(Increment)) {
+          if (isa<Instruction>(Increment)) {
             NewIncrement = PreheaderBuilder.CreateMul(
                 Increment, ConstantInt::get(Increment->getType(), Factor));
             NewIncrement->setName("coarsened_step");
