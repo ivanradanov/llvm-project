@@ -20,6 +20,10 @@
 #include "kmp_stats.h"
 #include "ompt-specific.h"
 
+#include <fstream>
+#include <chrono>
+#include <iostream>
+
 #define MAX_MESSAGE 512
 
 // flags will be used in future, e.g. to implement openmp_strict library
@@ -249,6 +253,38 @@ void __kmpc_push_proc_bind(ident_t *loc, kmp_int32 global_tid,
   __kmp_push_proc_bind(loc, global_tid, (kmp_proc_bind_t)proc_bind);
 }
 
+struct Env {
+  char *File = nullptr;
+  ident_t *CurLoc = nullptr;
+  std::chrono::time_point<std::chrono::high_resolution_clock> StartTime;
+  std::ofstream Output;
+  Env() {
+    File = getenv("OMP_HOST_PROFILE_FILE");
+    if (File)
+      Output = std::ofstream(File, std::ios_base::out | std::ios_base::app);
+  }
+  ~Env() {
+  }
+  void push(ident_t *Loc) {
+    if (!File)
+      return;
+    CurLoc = Loc;
+    StartTime = std::chrono::high_resolution_clock::now();
+  }
+  void pop(ident_t *Loc) {
+    if (!File)
+      return;
+    if (CurLoc != Loc)
+      abort();
+    std::chrono::time_point<std::chrono::high_resolution_clock> EndTime = std::chrono::high_resolution_clock::now();
+    auto Duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      EndTime - StartTime)
+      .count();
+
+    Output << Loc->psource << "," << Duration << "\n";
+  }
+} Env;
+
 /*!
 @ingroup PARALLEL
 @param loc  source location information
@@ -260,6 +296,7 @@ construct
 Do the actual fork and call the microtask in the relevant number of threads.
 */
 void __kmpc_fork_call(ident_t *loc, kmp_int32 argc, kmpc_micro microtask, ...) {
+  Env.push(loc);
   int gtid = __kmp_entry_gtid();
 
 #if (KMP_STATS_ENABLED)
@@ -328,6 +365,7 @@ void __kmpc_fork_call(ident_t *loc, kmp_int32 argc, kmpc_micro microtask, ...) {
     KMP_POP_PARTITIONED_TIMER();
   }
 #endif // KMP_STATS_ENABLED
+  Env.pop(loc);
 }
 
 /*!
