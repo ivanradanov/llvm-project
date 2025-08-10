@@ -1453,6 +1453,8 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
                                                 PTO.EagerlyInvalidateAnalyses));
 
   if (!LTOPreLink) {
+    MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(
+                                                      IndVarSimplifyPass())));
     MPM.addPass(UnrollAndInterleavePass());
   }
 
