@@ -1456,6 +1456,10 @@ PassBuilder::buildModuleOptimizationPipeline(OptimizationLevel Level,
     MPM.addPass(createModuleToFunctionPassAdaptor(createFunctionToLoopPassAdaptor(
                                                       IndVarSimplifyPass())));
     MPM.addPass(UnrollAndInterleavePass());
+    MPM.addPass(createModuleToFunctionPassAdaptor(SimplifyCFGPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(EarlyCSEPass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(InstCombinePass()));
+    MPM.addPass(createModuleToFunctionPassAdaptor(SLPVectorizerPass()));
   }
 
   invokeOptimizerLastEPCallbacks(MPM, Level);
