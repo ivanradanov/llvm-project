@@ -2,6 +2,7 @@
 #include "llvm/Transforms/IPO/CUDALaunchFixUp.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Analysis/InlineCost.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -54,6 +55,7 @@ void fixup(Module &M) {
     auto GridDim2 = CI->getArgOperand(2);
     auto BlockDim1 = CI->getArgOperand(3);
     auto BlockDim2 = CI->getArgOperand(4);
+    auto ArgPtr = CI->getArgOperand(5);
     auto SharedMemSize = CI->getArgOperand(6);
     auto StreamPtr = CI->getArgOperand(7);
     SmallVector<Value *> Args = {
@@ -61,12 +63,49 @@ void fixup(Module &M) {
         BlockDim2, SharedMemSize, StreamPtr,
     };
     auto StubFunc = cast<Function>(CI->getArgOperand(0));
-    for (auto &Arg : StubFunc->args())
-      Args.push_back(&Arg);
+
+    AllocaInst *ArgPtrAlloca = cast<AllocaInst>(ArgPtr);
+    assert(ArgPtrAlloca->getAllocatedType()->isPointerTy());
+    unsigned ArgsOffset = Args.size();
+    unsigned NumArgs = cast<ConstantInt>(ArgPtrAlloca->getArraySize())->getZExtValue();
+    for (int I = 0; I < NumArgs; I++)
+      Args.push_back(nullptr);
+
+    for (Use &ArgPtrUse : ArgPtr->uses()) {
+      if (ArgPtrUse.getUser() == CI)
+        continue;
+
+      Value *ThisArgPtr;
+      int ArgIdx;
+      if (auto Gep = dyn_cast<GetElementPtrInst>(ArgPtrUse.getUser())) {
+        assert(Gep->getPointerOperand() == ArgPtr);
+        assert(Gep->getNumIndices() == 1);
+        Value *GepIdx = Gep->idx_begin()->get();
+        ArgIdx = cast<ConstantInt>(GepIdx)->getSExtValue();
+        assert(ArgIdx > 0);
+        assert(Gep->getPointerOperandType()->isIntegerTy(8));
+        ThisArgPtr = Gep->getPointerOperand();
+      } else {
+        ArgIdx = 0;
+        ThisArgPtr = ArgPtr;
+      }
+
+      for (Use &ThisArgPtrUse : ThisArgPtr->uses()) {
+        if (StoreInst* SI = dyn_cast<StoreInst>(ThisArgPtrUse.getUser())) {
+          assert(SI->getPointerOperand() == ThisArgPtr);
+          assert(Args[ArgsOffset + ArgIdx] == nullptr);
+          Args[ArgsOffset + ArgIdx] = SI->getValueOperand();
+        } else {
+          assert(ThisArgPtrUse.getUser() == CI);
+        }
+      }
+    }
+    assert(all_of(Args, [](Value *V) {return V != nullptr;}));
+
     SmallVector<Type *> ArgTypes;
     for (Value *V : Args)
       ArgTypes.push_back(V->getType());
-    auto MlirLaunchFunc = Function::Create(
+    Function *MlirLaunchFunc = Function::Create(
         FunctionType::get(Type::getVoidTy(M.getContext()), ArgTypes,
                           /*isVarAtg=*/false),
         llvm::GlobalValue::ExternalLinkage,
